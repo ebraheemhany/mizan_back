@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "refresh_tokens" ALTER COLUMN "expiresAt" SET DATA TYPE TIMESTAMPTZ(3),
+ALTER COLUMN "revokedAt" SET DATA TYPE TIMESTAMPTZ(3);
+
+-- AlterTable
+ALTER TABLE "users" ALTER COLUMN "passwordChangedAt" SET DATA TYPE TIMESTAMPTZ(3);
