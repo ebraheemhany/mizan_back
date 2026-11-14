@@ -22,7 +22,8 @@ model Company {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  users User[]
+  users       User[]
+  invitations Invitation[]
 
   @@map("companies")
 }
@@ -41,10 +42,37 @@ model User {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  refreshTokens RefreshToken[]
+  refreshTokens   RefreshToken[]
+  sentInvitations Invitation[]
 
   @@index([companyId])
   @@map("users")
+}
+
+// An owner invites someone by email with a role. The invite link carries a random
+// token; only its SHA-256 hash is stored. Accepting it creates the user.
+model Invitation {
+  id         String    @id @default(uuid())
+  // Stored lowercased, like User.email.
+  email      String
+  name       String
+  role       Role
+  tokenHash  String    @unique
+  expiresAt  DateTime  @db.Timestamptz(3)
+  acceptedAt DateTime? @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Kept when the inviter is later removed, so the invite itself survives.
+  invitedById String?
+  invitedBy   User?   @relation(fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId])
+  @@index([email])
+  @@map("invitations")
 }
 
 // One row per issued refresh token. Only a SHA-256 hash is stored, never the token.

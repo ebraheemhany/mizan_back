@@ -1,0 +1,12 @@
+$kind: http-request
+url: "{{baseUrl}}/api/auth/me"
+method: GET
+headers:
+  Authorization: Bearer {{employeeAccessToken}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200 OK (after step 13 → 401)', () => pm.response.to.have.status(200));
+      if (pm.response.code === 200) console.log('Employee role now:', pm.response.json().user.role);
+    language: text/javascript
+order: 2000

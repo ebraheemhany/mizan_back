@@ -7,6 +7,8 @@ import { logger } from "./lib/logger.js";
 import { errorHandler, notFound } from "./middleware/error-handler.js";
 import { createAuthRateLimiters } from "./middleware/rate-limit.js";
 import { createAuthRouter } from "./modules/auth/auth.routes.js";
+import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
+import { createUsersRouter } from "./modules/users/users.routes.js";
 
 type AppOptions = {
   /** Turn rate limiting off (used by tests that make many requests from one IP). */
@@ -29,7 +31,10 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
     res.json({ status: "ok" });
   });
 
-  app.use("/api/auth", createAuthRouter(createAuthRateLimiters(rateLimit)));
+  const limiters = createAuthRateLimiters(rateLimit);
+  app.use("/api/auth", createAuthRouter(limiters));
+  app.use("/api/users", createUsersRouter());
+  app.use("/api/invitations", createInvitationsRouter(limiters));
 
   app.use(notFound);
   app.use(errorHandler);

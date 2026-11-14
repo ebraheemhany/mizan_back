@@ -3,19 +3,9 @@ import { AppError, unauthorized } from "../../lib/errors.js";
 import { hashPassword, verifyAgainstDummy, verifyPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
 import type { ChangePasswordInput, LoginInput, RegisterInput } from "./auth.schemas.js";
+import { publicUserSelect, type PublicUser } from "../users/public-user.js";
 import { issueTokens, revokeAllSessions, type TokenUser } from "./tokens.js";
 
-// The fields of a user that are safe to send to the frontend.
-const publicUserSelect = {
-  id: true,
-  email: true,
-  fullName: true,
-  role: true,
-  createdAt: true,
-  company: { select: { id: true, name: true } },
-} satisfies Prisma.UserSelect;
-
-export type PublicUser = Prisma.UserGetPayload<{ select: typeof publicUserSelect }>;
 
 const toTokenUser = (user: PublicUser): TokenUser => ({ id: user.id, companyId: user.company.id, role: user.role });
 

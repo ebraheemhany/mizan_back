@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{baseUrl}}/api/invitations/accept"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "token": "{{inviteToken}}",
+      "password": "{{password}}"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('201 Created (run it again → 400, the link works once)', () => pm.response.to.have.status(201));
+      if (pm.response.code === 201) pm.collectionVariables.set('employeeId', pm.response.json().user.id);
+    language: text/javascript
+order: 4000

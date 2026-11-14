@@ -1,0 +1,12 @@
+$kind: collection
+description: Run the requests in order (1 → 13). Tokens, emails and ids are saved automatically into collection variables. Each request has tests that show whether the result is what we expect.
+variables:
+  baseUrl: http://localhost:4000
+  password: Secret123!
+  ownerEmail: ""
+  ownerAccessToken: ""
+  employeeEmail: ""
+  employeeAccessToken: ""
+  employeeId: ""
+  inviteToken: ""
+  invitationId: ""

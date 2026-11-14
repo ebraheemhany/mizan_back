@@ -20,7 +20,7 @@ export const decodeJwt = (token: string) =>
   JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) as { iat: number; exp: number; sub: string };
 
 export async function resetDatabase() {
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "refresh_tokens", "users", "companies" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "invitations", "refresh_tokens", "users", "companies" CASCADE`);
 }
 
 export async function registerUser(email = uniqueEmail(), password = PASSWORD) {
@@ -41,4 +41,30 @@ export async function login(email: string, password = PASSWORD, remember = false
 export async function refreshLifetimeDays(refreshToken: string) {
   const row = await prisma.refreshToken.findUniqueOrThrow({ where: { tokenHash: hashToken(refreshToken) } });
   return Math.round((row.expiresAt.getTime() - row.createdAt.getTime()) / 86_400_000);
+}
+
+export const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+/** Registers a company and logs its owner in. */
+export async function ownerSession() {
+  const { email, user } = await registerUser();
+  const session = await login(email);
+  return { email, companyId: user.company.id as string, userId: user.id as string, token: session.accessToken };
+}
+
+/** Owner invites someone; returns the invite token taken from the link. */
+export async function invite(ownerToken: string, role = "accountant", email = uniqueEmail()) {
+  const res = await api().post("/api/invitations").set(auth(ownerToken)).send({ name: "Sara Ali", email, role });
+  if (res.status !== 201) throw new Error(`invite failed: ${res.status} ${JSON.stringify(res.body)}`);
+  const token = new URL(res.body.inviteUrl).pathname.split("/").pop()!;
+  return { email, token, invitation: res.body.invitation };
+}
+
+/** Invites someone, accepts the invite, and logs them in. */
+export async function teamMember(ownerToken: string, role = "accountant") {
+  const { email, token } = await invite(ownerToken, role);
+  const accepted = await api().post("/api/invitations/accept").send({ token, password: PASSWORD });
+  if (accepted.status !== 201) throw new Error(`accept failed: ${accepted.status} ${JSON.stringify(accepted.body)}`);
+  const session = await login(email);
+  return { email, userId: accepted.body.user.id as string, token: session.accessToken, refreshToken: session.refreshToken };
 }

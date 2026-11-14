@@ -1,6 +1,7 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { config } from "../../config.js";
 import type { Prisma, Role } from "../../generated/prisma/client.js";
+import { generateToken, hashToken } from "../../lib/crypto.js";
 import { AppError } from "../../lib/errors.js";
 import { signAccessToken } from "../../lib/jwt.js";
 import { prisma } from "../../lib/prisma.js";
@@ -13,15 +14,13 @@ export type TokenPair = { accessToken: string; refreshToken: string };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
-
 const lifetimeMs = (persistent: boolean) =>
   (persistent ? config.REFRESH_TOKEN_REMEMBER_TTL_DAYS : config.REFRESH_TOKEN_TTL_DAYS) * DAY_MS;
 
 const invalidRefreshToken = () => new AppError(401, "INVALID_REFRESH_TOKEN", "Refresh token is invalid or expired");
 
 async function createRefreshToken(db: Db, userId: string, persistent: boolean, familyId: string) {
-  const token = randomBytes(32).toString("base64url");
+  const token = generateToken();
   await db.refreshToken.create({
     data: {
       tokenHash: hashToken(token),

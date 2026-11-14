@@ -1,0 +1,10 @@
+$kind: http-request
+url: "{{baseUrl}}/api/invitations/{{invitationId}}"
+method: DELETE
+headers:
+  Authorization: Bearer {{ownerAccessToken}}
+scripts:
+  - type: afterResponse
+    code: pm.test('204 (404 if it was already accepted or revoked)', () => pm.response.to.have.status(204));
+    language: text/javascript
+order: 3000

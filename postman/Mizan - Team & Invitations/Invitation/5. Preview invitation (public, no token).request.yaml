@@ -1,0 +1,18 @@
+$kind: http-request
+url: "{{baseUrl}}/api/invitations/preview"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "token": "{{inviteToken}}"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200 OK', () => pm.response.to.have.status(200));
+      pm.test('shows company and role', () => { const i = pm.response.json().invitation; pm.expect(i.company.name).to.be.a('string'); pm.expect(i.role).to.eql('sales'); });
+    language: text/javascript
+order: 3000

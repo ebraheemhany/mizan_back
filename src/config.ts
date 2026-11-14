@@ -9,6 +9,9 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRES_IN: z.string().default("15m"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().positive().default(1),
   REFRESH_TOKEN_REMEMBER_TTL_DAYS: z.coerce.number().positive().default(30),
+  // Base URL of the frontend, used to build invite links.
+  APP_URL: z.url().default("http://localhost:3000"),
+  INVITATION_TTL_DAYS: z.coerce.number().positive().default(7),
   CORS_ORIGIN: z
     .string()
     .default("http://localhost:3000")

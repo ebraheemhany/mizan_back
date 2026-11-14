@@ -1,0 +1,14 @@
+# Use this workspace to collaborate
+workspace:
+  id: 4714963b-fab2-410e-880f-9ac33a31acdc
+
+localResources:
+  collections:
+    - ../Mizan - Team & Invitations
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../postman/collections/Mizan - Team & Invitations: 50d87afa-b33f-4ac8-b065-d75c3fb1abb8
+    ../postman/collections/Mizan - Team & Invitations Copy: 2fc06b1c-d7f4-4cd7-9fa5-059647013019

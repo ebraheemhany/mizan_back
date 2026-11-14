@@ -1,0 +1,12 @@
+$kind: http-request
+url: "{{baseUrl}}/api/invitations"
+method: GET
+headers:
+  Authorization: Bearer {{ownerAccessToken}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200 OK', () => pm.response.to.have.status(200));
+      pm.test('the new invite is listed', () => pm.expect(pm.response.json().invitations.map(i => i.id)).to.include(pm.collectionVariables.get('invitationId')));
+    language: text/javascript
+order: 2000

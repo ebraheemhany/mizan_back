@@ -1,0 +1,27 @@
+$kind: http-request
+url: "{{baseUrl}}/api/invitations"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{ownerAccessToken}}
+body:
+  type: text
+  content: |-
+    {
+      "name": "سارة علي",
+      "email": "{{employeeEmail}}",
+      "role": "sales"
+    }
+scripts:
+  - type: beforeRequest
+    code: pm.collectionVariables.set('employeeEmail', `sara${Date.now()}@example.com`);
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('201 Created', () => pm.response.to.have.status(201));
+      const body = pm.response.json();
+      pm.collectionVariables.set('invitationId', body.invitation.id);
+      pm.collectionVariables.set('inviteToken', body.inviteUrl.split('/').pop());
+      console.log('Invite link:', body.inviteUrl);
+    language: text/javascript
+order: 1000

@@ -1,0 +1,10 @@
+$kind: http-request
+url: "{{baseUrl}}/api/users"
+method: GET
+headers:
+  Authorization: Bearer {{employeeAccessToken}}
+scripts:
+  - type: afterResponse
+    code: "pm.test('403 Forbidden: only the owner can', () => pm.response.to.have.status(403));"
+    language: text/javascript
+order: 3000

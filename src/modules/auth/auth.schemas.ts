@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-const email = z.string().trim().toLowerCase().pipe(z.email());
+export const email = z.string().trim().toLowerCase().pipe(z.email());
 // Upper bound stops someone sending a huge string to make hashing slow.
-const newPassword = z.string().min(8).max(128);
+export const newPassword = z.string().min(8).max(128);
 
 export const registerSchema = z.object({
   fullName: z.string().trim().min(3).max(100),

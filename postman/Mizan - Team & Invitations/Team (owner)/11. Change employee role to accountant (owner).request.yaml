@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{baseUrl}}/api/users/{{employeeId}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{ownerAccessToken}}
+body:
+  type: text
+  content: |-
+    {
+      "role": "accountant"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200 OK', () => pm.response.to.have.status(200));
+      pm.test('role changed', () => pm.expect(pm.response.json().user.role).to.eql('accountant'));
+    language: text/javascript
+order: 2000

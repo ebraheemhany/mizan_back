@@ -47,6 +47,8 @@ export type AuthRateLimiters = {
   register: RequestHandler;
   /** Wrong current passwords for one logged-in user. Must run after `authenticate`. */
   changePassword: RequestHandler;
+  /** Bad invite tokens from one IP (public preview/accept endpoints). */
+  invitationToken: RequestHandler;
 };
 
 /**
@@ -56,7 +58,13 @@ export type AuthRateLimiters = {
  */
 export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
   if (!enabled) {
-    return { loginPerAccount: passThrough, loginPerIp: passThrough, register: passThrough, changePassword: passThrough };
+    return {
+      loginPerAccount: passThrough,
+      loginPerIp: passThrough,
+      register: passThrough,
+      changePassword: passThrough,
+      invitationToken: passThrough,
+    };
   }
 
   return {
@@ -84,6 +92,12 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       limit: 5,
       onlyFailures: true,
       key: (req) => `change-password:${req.user?.id ?? clientIp(req)}`,
+    }),
+    invitationToken: createLimiter({
+      windowMs: 15 * MINUTE,
+      limit: 20,
+      onlyFailures: true,
+      key: (req) => `invitation:${clientIp(req)}`,
     }),
   };
 }

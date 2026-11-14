@@ -1,0 +1,12 @@
+$kind: http-request
+url: "{{baseUrl}}/api/users"
+method: GET
+headers:
+  Authorization: Bearer {{ownerAccessToken}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('200 OK', () => pm.response.to.have.status(200));
+      pm.test('owner + employee', () => pm.expect(pm.response.json().users.length).to.eql(2));
+    language: text/javascript
+order: 1000

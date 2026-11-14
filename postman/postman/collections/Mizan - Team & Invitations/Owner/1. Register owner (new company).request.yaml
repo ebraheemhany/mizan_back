@@ -1,0 +1,24 @@
+$kind: http-request
+url: "{{baseUrl}}/api/auth/register"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: text
+  content: |-
+    {
+      "fullName": "محمد أحمد",
+      "companyName": "شركة ميزان",
+      "email": "{{ownerEmail}}",
+      "password": "{{password}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: pm.collectionVariables.set('ownerEmail', `owner${Date.now()}@example.com`);
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('201 Created', () => pm.response.to.have.status(201));
+      pm.test('role is owner', () => pm.expect(pm.response.json().user.role).to.eql('owner'));
+    language: text/javascript
+order: 1000
