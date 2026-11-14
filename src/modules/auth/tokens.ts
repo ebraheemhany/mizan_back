@@ -10,7 +10,12 @@ type Db = Prisma.TransactionClient;
 
 export type TokenUser = { id: string; companyId: string; role: Role };
 
-export type TokenPair = { accessToken: string; refreshToken: string };
+export type TokenPair = {
+  accessToken: string;
+  refreshToken: string;
+  /** When the refresh token stops working, so a client can give its cookie the same lifetime. */
+  refreshTokenExpiresAt: Date;
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -21,16 +26,11 @@ const invalidRefreshToken = () => new AppError(401, "INVALID_REFRESH_TOKEN", "Re
 
 async function createRefreshToken(db: Db, userId: string, persistent: boolean, familyId: string) {
   const token = generateToken();
+  const expiresAt = new Date(Date.now() + lifetimeMs(persistent));
   await db.refreshToken.create({
-    data: {
-      tokenHash: hashToken(token),
-      familyId,
-      userId,
-      persistent,
-      expiresAt: new Date(Date.now() + lifetimeMs(persistent)),
-    },
+    data: { tokenHash: hashToken(token), familyId, userId, persistent, expiresAt },
   });
-  return token;
+  return { refreshToken: token, refreshTokenExpiresAt: expiresAt };
 }
 
 const signFor = (user: TokenUser) => signAccessToken({ sub: user.id, companyId: user.companyId, role: user.role });
@@ -40,8 +40,8 @@ export async function issueTokens(user: TokenUser, persistent: boolean, db: Db =
   // Housekeeping: drop this user's expired tokens so the table does not grow forever.
   await db.refreshToken.deleteMany({ where: { userId: user.id, expiresAt: { lt: new Date() } } });
 
-  const refreshToken = await createRefreshToken(db, user.id, persistent, randomUUID());
-  return { accessToken: await signFor(user), refreshToken };
+  const refresh = await createRefreshToken(db, user.id, persistent, randomUUID());
+  return { accessToken: await signFor(user), ...refresh };
 }
 
 /** Exchanges a refresh token for a new pair. The used refresh token stops working. */
@@ -65,8 +65,9 @@ export async function rotateRefreshToken(token: string): Promise<TokenPair> {
     throw new AppError(401, "REFRESH_TOKEN_REUSED", "Session was ended for security reasons, please log in again");
   }
 
-  const refreshToken = await createRefreshToken(prisma, found.userId, found.persistent, found.familyId);
-  return { accessToken: await signFor(found.user), refreshToken };
+  // The new token keeps the session's "remember me" choice (persistent).
+  const refresh = await createRefreshToken(prisma, found.userId, found.persistent, found.familyId);
+  return { accessToken: await signFor(found.user), ...refresh };
 }
 
 /** Logout: ends the session the given refresh token belongs to. Unknown tokens are ignored. */

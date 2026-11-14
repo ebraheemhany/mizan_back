@@ -86,6 +86,20 @@ describe("POST /api/auth/login", () => {
     expect(await refreshLifetimeDays((await login(email, PASSWORD, true)).refreshToken)).toBe(30);
   });
 
+  it("tells the client when the refresh token expires", async () => {
+    const { email } = await registerUser();
+    for (const remember of [false, true]) {
+      const res = await api().post("/api/auth/login").send({ email, password: PASSWORD, remember });
+      const row = await prisma.refreshToken.findUniqueOrThrow({ where: { tokenHash: hashToken(res.body.refreshToken) } });
+      expect(new Date(res.body.refreshTokenExpiresAt).getTime()).toBe(row.expiresAt.getTime());
+
+      // Rotation returns the new token's expiry, keeping the "remember me" lifetime.
+      const rotated = await api().post("/api/auth/refresh").send({ refreshToken: res.body.refreshToken });
+      const days = (new Date(rotated.body.refreshTokenExpiresAt).getTime() - Date.now()) / 86_400_000;
+      expect(Math.round(days)).toBe(remember ? 30 : 1);
+    }
+  });
+
   it("accepts the email in any letter case", async () => {
     const { email } = await registerUser();
     const res = await api().post("/api/auth/login").send({ email: email.toUpperCase(), password: PASSWORD });
