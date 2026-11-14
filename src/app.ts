@@ -7,6 +7,8 @@ import { logger } from "./lib/logger.js";
 import { errorHandler, notFound } from "./middleware/error-handler.js";
 import { createAuthRateLimiters } from "./middleware/rate-limit.js";
 import { createAuthRouter } from "./modules/auth/auth.routes.js";
+import { createCustomersRouter } from "./modules/customers/customers.routes.js";
+import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
 
@@ -24,7 +26,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
 
   app.use(helmet());
   app.use(cors({ origin: config.CORS_ORIGIN }));
-  app.use(express.json());
+  // 1mb fits a CSV import of 1000 customers; the default (100kb) does not.
+  app.use(express.json({ limit: "1mb" }));
   app.use(pinoHttp({ logger }));
 
   app.get("/health", (_req, res) => {
@@ -35,6 +38,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/auth", createAuthRouter(limiters));
   app.use("/api/users", createUsersRouter());
   app.use("/api/invitations", createInvitationsRouter(limiters));
+  app.use("/api/team-members", createDirectoryRouter());
+  app.use("/api/customers", createCustomersRouter());
 
   app.use(notFound);
   app.use(errorHandler);

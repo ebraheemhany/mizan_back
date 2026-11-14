@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import { unauthorized, forbidden } from "../lib/errors.js";
 import { verifyAccessToken } from "../lib/jwt.js";
+import { can, type Permission } from "../lib/permissions.js";
 import { prisma } from "../lib/prisma.js";
 import type { Role } from "../generated/prisma/client.js";
 
@@ -39,5 +40,14 @@ export const requireRole =
   (req, _res, next) => {
     if (!req.user) throw unauthorized();
     if (!roles.includes(req.user.role)) throw forbidden();
+    next();
+  };
+
+/** Allows the request only if the user's role has this permission (see lib/permissions). */
+export const requirePermission =
+  (permission: Permission): RequestHandler =>
+  (req, _res, next) => {
+    if (!req.user) throw unauthorized();
+    if (!can(req.user.role, permission)) throw forbidden();
     next();
   };

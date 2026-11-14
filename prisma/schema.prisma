@@ -24,6 +24,7 @@ model Company {
 
   users       User[]
   invitations Invitation[]
+  customers   Customer[]
 
   @@map("companies")
 }
@@ -42,11 +43,44 @@ model User {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  refreshTokens   RefreshToken[]
-  sentInvitations Invitation[]
+  refreshTokens     RefreshToken[]
+  sentInvitations   Invitation[]
+  assignedCustomers Customer[]
 
   @@index([companyId])
   @@map("users")
+}
+
+model Customer {
+  id          String  @id @default(uuid())
+  name        String
+  // Optional details: null when left empty.
+  contactName String?
+  phone       String?
+  email       String?
+  city        String?
+  taxNumber   String?
+  notes       String?
+
+  // What the customer owes. Kept up to date by invoices and payments (coming
+  // later); 0 until then. Stored, not computed, so lists can sort/filter on it.
+  balance        Decimal  @default(0) @db.Decimal(14, 2)
+  // Last invoice, payment or edit. Drives "recent" sorting and the inactive status.
+  lastActivityAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Team member responsible for this customer. Cleared if they leave the team.
+  assignedToId String?
+  assignedTo   User?   @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, lastActivityAt])
+  @@index([companyId, name])
+  @@index([assignedToId])
+  @@map("customers")
 }
 
 // An owner invites someone by email with a role. The invite link carries a random
