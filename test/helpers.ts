@@ -3,7 +3,9 @@ import request from "supertest";
 import { createApp } from "../src/app.js";
 import { prisma } from "../src/lib/prisma.js";
 
-export const app = createApp();
+// Rate limiting is off here: these tests send many requests from one IP.
+// test/rate-limit.test.ts covers the limits with their real settings.
+export const app = createApp({ rateLimit: false });
 export const api = () => request(app);
 export { prisma };
 

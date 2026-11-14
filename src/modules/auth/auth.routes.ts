@@ -1,34 +1,51 @@
 import { Router } from "express";
 import { authenticate } from "../../middleware/auth.js";
+import type { AuthRateLimiters } from "../../middleware/rate-limit.js";
 import { validateBody } from "../../middleware/validate.js";
 import { changePasswordSchema, loginSchema, refreshTokenSchema, registerSchema } from "./auth.schemas.js";
 import * as authService from "./auth.service.js";
 import { revokeSession, rotateRefreshToken } from "./tokens.js";
 
-export const authRouter = Router();
+export function createAuthRouter(limit: AuthRateLimiters) {
+  const router = Router();
 
-authRouter.post("/register", validateBody(registerSchema), async (req, res) => {
-  res.status(201).json(await authService.register(req.body));
-});
+  router.post("/register", limit.register, validateBody(registerSchema), async (req, res) => {
+    res.status(201).json(await authService.register(req.body));
+  });
 
-authRouter.post("/login", validateBody(loginSchema), async (req, res) => {
-  res.json(await authService.login(req.body));
-});
+  router.post(
+    "/login",
+    validateBody(loginSchema),
+    limit.loginPerIp,
+    limit.loginPerAccount,
+    async (req, res) => {
+      res.json(await authService.login(req.body));
+    },
+  );
 
-// No access token needed: this is what the frontend calls when the access token has expired.
-authRouter.post("/refresh", validateBody(refreshTokenSchema), async (req, res) => {
-  res.json(await rotateRefreshToken(req.body.refreshToken));
-});
+  // No access token needed: this is what the frontend calls when the access token has expired.
+  router.post("/refresh", validateBody(refreshTokenSchema), async (req, res) => {
+    res.json(await rotateRefreshToken(req.body.refreshToken));
+  });
 
-authRouter.post("/logout", validateBody(refreshTokenSchema), async (req, res) => {
-  await revokeSession(req.body.refreshToken);
-  res.status(204).end();
-});
+  router.post("/logout", validateBody(refreshTokenSchema), async (req, res) => {
+    await revokeSession(req.body.refreshToken);
+    res.status(204).end();
+  });
 
-authRouter.get("/me", authenticate, async (req, res) => {
-  res.json({ user: await authService.getCurrentUser(req.user!.id) });
-});
+  router.get("/me", authenticate, async (req, res) => {
+    res.json({ user: await authService.getCurrentUser(req.user!.id) });
+  });
 
-authRouter.post("/change-password", authenticate, validateBody(changePasswordSchema), async (req, res) => {
-  res.json(await authService.changePassword(req.user!.id, req.body));
-});
+  router.post(
+    "/change-password",
+    authenticate,
+    limit.changePassword,
+    validateBody(changePasswordSchema),
+    async (req, res) => {
+      res.json(await authService.changePassword(req.user!.id, req.body));
+    },
+  );
+
+  return router;
+}

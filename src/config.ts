@@ -13,6 +13,13 @@ const envSchema = z.object({
     .string()
     .default("http://localhost:3000")
     .transform((value) => value.split(",").map((origin) => origin.trim())),
+  // How many proxies sit in front of the app ("false" = none, e.g. local dev).
+  // Use the hop count (usually 1), never "true": that trusts any X-Forwarded-For
+  // header, letting clients fake their IP and dodge rate limits.
+  TRUST_PROXY: z
+    .string()
+    .default("false")
+    .transform((value) => (value === "false" ? false : /^\d+$/.test(value) ? Number(value) : value)),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 
