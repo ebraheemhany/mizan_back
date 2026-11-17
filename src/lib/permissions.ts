@@ -8,6 +8,8 @@ import type { Role } from "../generated/prisma/client.js";
 const PERMISSIONS = {
   viewCustomers: ["owner", "accountant", "sales", "viewer"],
   editCustomers: ["owner", "sales"],
+  // Prices and tax rates are accounting data.
+  editProducts: ["owner", "accountant"],
   issueInvoices: ["owner", "accountant"],
   recordPayments: ["owner", "accountant"],
   expenses: ["owner", "accountant"],

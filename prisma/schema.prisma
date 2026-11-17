@@ -25,8 +25,23 @@ model Company {
   users       User[]
   invitations Invitation[]
   customers   Customer[]
+  products    Product[]
 
   @@map("companies")
+}
+
+enum ProductType {
+  service
+  product
+}
+
+enum ProductCategory {
+  software
+  support
+  consulting
+  devices
+  network
+  accessories
 }
 
 model User {
@@ -128,4 +143,31 @@ model RefreshToken {
   @@index([userId])
   @@index([familyId])
   @@map("refresh_tokens")
+}
+
+// Something the company sells: a service or a product (catalog item).
+model Product {
+  id       String          @id @default(uuid())
+  name     String
+  type     ProductType
+  // Unique per company, stored uppercase (e.g. SRV-001).
+  code     String
+  price    Decimal         @db.Decimal(14, 2)
+  // Percent: 14 means 14%.
+  taxRate  Decimal         @db.Decimal(5, 2)
+  category ProductCategory
+
+  // Products only (null for services).
+  stock      Int?
+  lowStockAt Int?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, code])
+  @@index([companyId, createdAt])
+  @@map("products")
 }
