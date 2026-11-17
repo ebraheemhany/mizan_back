@@ -17,8 +17,38 @@ enum Role {
 }
 
 model Company {
-  id        String   @id @default(uuid())
-  name      String
+  id   String @id @default(uuid())
+  name String
+
+  // --- Settings (edited by the owner in Settings) ---
+
+  // Company details printed on invoices.
+  taxNumber          String?
+  commercialRegister String?
+  phone              String?
+  address            String?
+
+  // Taxes and money.
+  currency           Currency @default(EGP)
+  vatEnabled         Boolean  @default(true)
+  withholdingEnabled Boolean  @default(false)
+  fiscalStartMonth   Int      @default(1)
+
+  // Numbering: the next invoice is invoicePrefix + invoiceNextNumber (INV-1044).
+  invoicePrefix     String @default("INV-")
+  invoiceNextNumber Int    @default(1)
+  quotePrefix       String @default("Q-")
+  quoteNextNumber   Int    @default(1)
+  paymentTermsDays  Int    @default(30)
+
+  // Invoice look.
+  invoiceTemplate InvoiceTemplate @default(classic)
+  invoiceFooter   String?
+
+  // On/off switches. JSON so new switches don't need a migration.
+  notifications Json @default("{\"overdueInvoice\":true,\"newPayment\":true,\"taskReminder\":true,\"weeklyDigest\":false}")
+  integrations  Json @default("{\"whatsapp\":false,\"paymentGateway\":false,\"eta\":false,\"calendar\":false}")
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -28,6 +58,19 @@ model Company {
   products    Product[]
 
   @@map("companies")
+}
+
+enum Currency {
+  EGP
+  USD
+  SAR
+  AED
+}
+
+enum InvoiceTemplate {
+  classic
+  modern
+  minimal
 }
 
 enum ProductType {

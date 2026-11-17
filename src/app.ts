@@ -9,6 +9,7 @@ import { createAuthRateLimiters } from "./middleware/rate-limit.js";
 import { createAuthRouter } from "./modules/auth/auth.routes.js";
 import { createCustomersRouter } from "./modules/customers/customers.routes.js";
 import { createProductsRouter } from "./modules/products/products.routes.js";
+import { createSettingsRouter } from "./modules/settings/settings.routes.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
@@ -42,6 +43,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/team-members", createDirectoryRouter());
   app.use("/api/customers", createCustomersRouter());
   app.use("/api/products", createProductsRouter());
+  app.use("/api/settings", createSettingsRouter());
 
   app.use(notFound);
   app.use(errorHandler);
