@@ -1,4 +1,5 @@
 import type { Prisma } from "../../generated/prisma/client.js";
+import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { integrationsSection, notificationsSection, type UpdateSettingsInput } from "./settings.schemas.js";
 
@@ -93,7 +94,16 @@ export async function updateSettings(companyId: string, input: UpdateSettingsInp
     data.fiscalStartMonth = input.taxes.fiscalStartMonth;
   }
   if (input.numbering) {
-    // Once invoices exist, a next number that is already used will be refused.
+    // Invoice numbers never repeat: the next one must be after the last one used.
+    const { _max } = await prisma.invoice.aggregate({ where: { companyId }, _max: { number: true } });
+    if (_max.number !== null && input.numbering.invoiceNext <= _max.number) {
+      throw new AppError(
+        409,
+        "INVOICE_NUMBER_USED",
+        `Invoice number ${_max.number} is already used; the next number must be ${_max.number + 1} or more`,
+        { field: "invoiceNext", minimum: _max.number + 1 },
+      );
+    }
     data.invoicePrefix = input.numbering.invoicePrefix;
     data.invoiceNextNumber = input.numbering.invoiceNext;
     data.quotePrefix = input.numbering.quotePrefix;

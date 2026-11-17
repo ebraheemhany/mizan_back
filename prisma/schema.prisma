@@ -56,6 +56,7 @@ model Company {
   invitations Invitation[]
   customers   Customer[]
   products    Product[]
+  invoices    Invoice[]
 
   @@map("companies")
 }
@@ -104,6 +105,9 @@ model User {
   refreshTokens     RefreshToken[]
   sentInvitations   Invitation[]
   assignedCustomers Customer[]
+  createdInvoices   Invoice[]
+  invoicePayments   InvoicePayment[]
+  invoiceEvents     InvoiceEvent[]
 
   @@index([companyId])
   @@map("users")
@@ -134,6 +138,8 @@ model Customer {
   // Team member responsible for this customer. Cleared if they leave the team.
   assignedToId String?
   assignedTo   User?   @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  invoices Invoice[]
 
   @@index([companyId, lastActivityAt])
   @@index([companyId, name])
@@ -210,7 +216,142 @@ model Product {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
+  invoiceLines InvoiceLine[]
+
   @@unique([companyId, code])
   @@index([companyId, createdAt])
   @@map("products")
+}
+
+enum InvoiceStatus {
+  draft
+  sent
+  partial
+  paid
+  cancelled
+}
+
+enum PaymentMethod {
+  cash
+  bank
+  card
+}
+
+enum InvoiceEventType {
+  created
+  sent
+  viewed
+  reminderSent
+  payment
+  cancelled
+}
+
+// "overdue" is not a stored status: a sent/partial invoice whose due date has
+// passed is overdue (worked out when reading, by Africa/Cairo date).
+model Invoice {
+  id           String        @id @default(uuid())
+  // Sequential per company, assigned on creation from the company's invoiceNextNumber.
+  number       Int
+  // The prefix in force when the invoice was created (INV-), shown as INV-1044.
+  numberPrefix String
+  status       InvoiceStatus
+
+  issueDate        DateTime @db.Date
+  dueDate          DateTime @db.Date
+  paymentTermsDays Int
+
+  // Customer details as they were when the invoice was written: an invoice must
+  // not change if the customer record is edited later.
+  customerName      String
+  customerTaxNumber String?
+  customerEmail     String?
+  customerPhone     String?
+  customerCity      String?
+
+  subtotal   Decimal @db.Decimal(14, 2)
+  // Percent: 14 means 14%. 0 when VAT is off in the settings.
+  vatRate    Decimal @db.Decimal(5, 2)
+  vat        Decimal @db.Decimal(14, 2)
+  total      Decimal @db.Decimal(14, 2)
+  amountPaid Decimal @default(0) @db.Decimal(14, 2)
+
+  notes       String?
+  // Random token for the public link (/i/<token>). Set when the invoice is sent.
+  publicToken String?   @unique
+  sentAt      DateTime? @db.Timestamptz(3)
+  cancelledAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // A customer with invoices can't be deleted (NoAction = refused, checked at the
+  // end of the statement, so deleting a whole company still works).
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: NoAction)
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  lines    InvoiceLine[]
+  payments InvoicePayment[]
+  events   InvoiceEvent[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, issueDate])
+  @@index([customerId])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id          String  @id @default(uuid())
+  position    Int
+  description String
+  quantity    Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  // quantity x unitPrice, rounded to 2 decimals.
+  amount      Decimal @db.Decimal(14, 2)
+
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // Optional link to the catalog; the line keeps its own text and price.
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+model InvoicePayment {
+  id        String        @id @default(uuid())
+  amount    Decimal       @db.Decimal(14, 2)
+  date      DateTime      @db.Date
+  method    PaymentMethod
+  note      String?
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@index([date])
+  @@map("invoice_payments")
+}
+
+// The invoice's history timeline (created, sent, payment...).
+model InvoiceEvent {
+  id        String           @id @default(uuid())
+  type      InvoiceEventType
+  values    Json             @default("{}")
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@map("invoice_events")
 }
