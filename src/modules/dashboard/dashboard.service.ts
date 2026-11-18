@@ -3,14 +3,12 @@ import { businessToday, daysBetween, monthRange, toDate, toIso } from "../../lib
 import { Decimal, moneyString, ZERO } from "../../lib/money.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
+import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
 import { invoiceStats, overdueWhere } from "../invoices/invoices.service.js";
 
 const CHART_MONTHS = 6;
 const ATTENTION_LIMIT = 5;
 
-/** Change in percent, or null when there is nothing to compare with. */
-const changePct = (now: Decimal, before: Decimal) =>
-  before.isZero() ? null : now.minus(before).dividedBy(before).times(100).round().toNumber();
 
 /**
  * Revenue per month: what was invoiced, before VAT (subtotal), on issued
@@ -64,25 +62,35 @@ export async function dashboard(companyId: string, role: Role) {
   }
 
   const firstMonth = monthRange(today, -(CHART_MONTHS - 1)).start;
-  const revenue = await revenueByMonth(companyId, firstMonth);
+  const [revenue, expenses] = await Promise.all([
+    revenueByMonth(companyId, firstMonth),
+    expensesByMonth(companyId, firstMonth),
+  ]);
   const chart = Array.from({ length: CHART_MONTHS }, (_, i) => {
     const month = monthRange(today, i - (CHART_MONTHS - 1)).start.slice(0, 7);
-    // Expenses arrive with the expenses module; until then there are none.
-    return { month, revenue: moneyString(revenue.get(month) ?? ZERO), expenses: "0.00" };
+    return {
+      month,
+      revenue: moneyString(revenue.get(month) ?? ZERO),
+      expenses: moneyString(expenses.get(month) ?? ZERO),
+    };
   });
 
-  const revenueNow = revenue.get(thisMonth.start.slice(0, 7)) ?? ZERO;
-  const revenueBefore = revenue.get(monthRange(today, -1).start.slice(0, 7)) ?? ZERO;
-  const expensesNow = ZERO;
+  const nowKey = thisMonth.start.slice(0, 7);
+  const beforeKey = monthRange(today, -1).start.slice(0, 7);
+  const revenueNow = revenue.get(nowKey) ?? ZERO;
+  const revenueBefore = revenue.get(beforeKey) ?? ZERO;
+  const expensesNow = expenses.get(nowKey) ?? ZERO;
+  const expensesBefore = expenses.get(beforeKey) ?? ZERO;
 
   return {
     financials: {
       revenue: moneyString(revenueNow),
       revenueChange: changePct(revenueNow, revenueBefore),
       expenses: moneyString(expensesNow),
-      expensesChange: null,
+      expensesChange: changePct(expensesNow, expensesBefore),
       netProfit: moneyString(revenueNow.minus(expensesNow)),
-      netProfitChange: changePct(revenueNow.minus(expensesNow), revenueBefore),
+      // Profit compared with last month's profit (not last month's revenue).
+      netProfitChange: changePct(revenueNow.minus(expensesNow), revenueBefore.minus(expensesBefore)),
       chart,
     },
     receivable,

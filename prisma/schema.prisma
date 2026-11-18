@@ -60,6 +60,7 @@ model Company {
   products    Product[]
   invoices    Invoice[]
   payments    InvoicePayment[]
+  expenses    Expense[]
 
   @@map("companies")
 }
@@ -111,6 +112,7 @@ model User {
   createdInvoices   Invoice[]
   invoicePayments   InvoicePayment[]
   invoiceEvents     InvoiceEvent[]
+  expenses          Expense[]
 
   @@index([companyId])
   @@map("users")
@@ -385,4 +387,53 @@ model InvoiceEvent {
 
   @@index([invoiceId])
   @@map("invoice_events")
+}
+
+enum ExpenseCategory {
+  salaries
+  rent
+  purchases
+  marketing
+  utilities
+  software
+}
+
+// Paid now, or owed to a vendor (due) and paid later.
+enum ExpenseStatus {
+  paid
+  due
+}
+
+enum ExpenseSource {
+  bank
+  cash
+  card
+}
+
+model Expense {
+  id       String          @id @default(uuid())
+  title    String
+  category ExpenseCategory
+  amount   Decimal         @db.Decimal(14, 2)
+  // The day the expense belongs to (it counts in this day's month).
+  date     DateTime        @db.Date
+  status   ExpenseStatus
+  // Where the money came from; set once it is paid.
+  paidFrom ExpenseSource?
+  paidAt   DateTime?       @db.Timestamptz(3)
+  // When a due expense has to be paid.
+  dueDate  DateTime?       @db.Date
+  vendor   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, date])
+  @@index([companyId, status])
+  @@map("expenses")
 }
