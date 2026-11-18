@@ -13,6 +13,7 @@ import { createExpensesRouter } from "./modules/expenses/expenses.routes.js";
 import { createInvoicesRouter, createPublicInvoicesRouter } from "./modules/invoices/invoices.routes.js";
 import { createPaymentsRouter } from "./modules/payments/payments.routes.js";
 import { createProductsRouter } from "./modules/products/products.routes.js";
+import { createReportsRouter } from "./modules/reports/reports.routes.js";
 import { createSettingsRouter } from "./modules/settings/settings.routes.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
@@ -53,6 +54,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/payments", createPaymentsRouter());
   app.use("/api/dashboard", createDashboardRouter());
   app.use("/api/expenses", createExpensesRouter());
+  app.use("/api/reports", createReportsRouter());
 
   app.use(notFound);
   app.use(errorHandler);

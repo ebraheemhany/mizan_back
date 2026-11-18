@@ -52,7 +52,17 @@ export function monthRange(iso: string, offset = 0) {
   return { start: toIso(start), end: toIso(end) };
 }
 
-export function yearRange(iso: string) {
-  const y = iso.slice(0, 4);
+/** First and last day of the calendar quarter containing `iso`, shifted by `offset` quarters. */
+export function quarterRange(iso: string, offset = 0) {
+  const [y, m] = iso.split("-").map(Number) as [number, number];
+  const firstMonth = (Math.floor((m - 1) / 3) + offset) * 3; // 0-based; Date.UTC wraps years
+  const start = new Date(Date.UTC(y, firstMonth, 1));
+  const end = new Date(Date.UTC(y, firstMonth + 3, 0));
+  return { start: toIso(start), end: toIso(end) };
+}
+
+/** The calendar year containing `iso`, shifted by `offset` years. */
+export function yearRange(iso: string, offset = 0) {
+  const y = Number(iso.slice(0, 4)) + offset;
   return { start: `${y}-01-01`, end: `${y}-12-31` };
 }

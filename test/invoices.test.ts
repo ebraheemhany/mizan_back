@@ -158,6 +158,29 @@ describe("drafts and the customer's balance", () => {
     expect(again.status).toBe(409);
     expect(again.body.error.code).toBe("INVOICE_NOT_DRAFT");
   });
+
+  it("an invoice can't be issued with a date after today; a draft can, until it is sent", async () => {
+    const owner = await ownerSession();
+    const customer = await customerOf(owner.token);
+    const tomorrow = addDays(today(), 1);
+
+    const issued = await api()
+      .post("/api/invoices")
+      .set(auth(owner.token))
+      .send({ customerId: customer.id, issueDate: tomorrow, terms: 30, items: oneItem, send: true });
+    expect(issued.status).toBe(400);
+    expect(issued.body.error.code).toBe("FUTURE_ISSUE_DATE");
+
+    const draft = await createInvoice(owner.token, customer.id, { send: false, issueDate: tomorrow });
+    const send = await api().post(`/api/invoices/${draft.id}/send`).set(auth(owner.token));
+    expect(send.status).toBe(409);
+    expect(send.body.error.code).toBe("FUTURE_ISSUE_DATE");
+    expect(await balanceOf(customer.id)).toBe("0.00");
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe("draft");
+
+    // Issued today: fine.
+    expect((await createInvoice(owner.token, customer.id, { issueDate: today() })).status).toBe("sent");
+  });
 });
 
 describe("payments", () => {

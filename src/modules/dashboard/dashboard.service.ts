@@ -1,29 +1,14 @@
 import type { Role } from "../../generated/prisma/client.js";
 import { businessToday, daysBetween, monthRange, toDate, toIso } from "../../lib/dates.js";
-import { Decimal, moneyString, ZERO } from "../../lib/money.js";
+import { moneyString, ZERO } from "../../lib/money.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
 import { invoiceStats, overdueWhere } from "../invoices/invoices.service.js";
+import { revenueByMonth } from "../reports/revenue.js";
 
 const CHART_MONTHS = 6;
 const ATTENTION_LIMIT = 5;
-
-
-/**
- * Revenue per month: what was invoiced, before VAT (subtotal), on issued
- * invoices. Drafts and cancelled invoices don't count.
- */
-async function revenueByMonth(companyId: string, from: string) {
-  const rows = await prisma.$queryRaw<{ month: string; revenue: Decimal }[]>`
-    SELECT to_char(date_trunc('month', "issueDate"), 'YYYY-MM') AS month, SUM("subtotal") AS revenue
-    FROM "invoices"
-    WHERE "companyId" = ${companyId}
-      AND "status" IN ('sent', 'partial', 'paid')
-      AND "issueDate" >= ${toDate(from)}::date
-    GROUP BY 1`;
-  return new Map(rows.map((r) => [r.month, new Decimal(r.revenue)]));
-}
 
 export async function dashboard(companyId: string, role: Role) {
   const today = businessToday();
@@ -63,7 +48,7 @@ export async function dashboard(companyId: string, role: Role) {
 
   const firstMonth = monthRange(today, -(CHART_MONTHS - 1)).start;
   const [revenue, expenses] = await Promise.all([
-    revenueByMonth(companyId, firstMonth),
+    revenueByMonth(companyId, { start: firstMonth, end: thisMonth.end }),
     expensesByMonth(companyId, firstMonth),
   ]);
   const chart = Array.from({ length: CHART_MONTHS }, (_, i) => {

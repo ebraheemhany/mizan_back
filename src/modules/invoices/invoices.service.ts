@@ -410,6 +410,9 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput) {
     if (found !== productIds.length) throw new AppError(400, "INVALID_PRODUCT", "An item is not in this company's catalog");
   }
 
+  // An issued invoice can't be dated in the future (a draft may be, until it is sent).
+  if (input.send && input.issueDate > businessToday()) throw futureIssueDate(400);
+
   const name = await actorName(actor.id);
 
   try {
@@ -484,10 +487,14 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput) {
   }
 }
 
+const futureIssueDate = (status: 400 | 409) =>
+  new AppError(status, "FUTURE_ISSUE_DATE", "An invoice can't be issued with a date after today", { field: "issueDate" });
+
 /** Issues a draft: it gets its public link and starts counting in the customer's balance. */
 export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
   await prisma.$transaction(async (tx) => {
-    const row = await findRow(tx, actor.companyId, ref, { id: true, status: true, total: true, customerId: true });
+    const row = await findRow(tx, actor.companyId, ref, { id: true, status: true, total: true, customerId: true, issueDate: true });
+    if (row.status === "draft" && toIso(row.issueDate) > businessToday()) throw futureIssueDate(409);
     // The status condition makes this safe if two people press "send" at once.
     const { count } = await tx.invoice.updateMany({
       where: { id: row.id, status: "draft" },

@@ -5,6 +5,7 @@ import { Decimal, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
+import { revenueByMonth } from "../reports/revenue.js";
 import type { CreateExpenseInput, ListExpensesQuery } from "./expenses.schemas.js";
 
 type Actor = { id: string; companyId: string; role: Role };
@@ -113,19 +114,6 @@ export async function expensesByMonth(companyId: string, from: string) {
   return new Map(rows.map((r) => [r.month, new Decimal(r.total)]));
 }
 
-/** Revenue of a month: issued invoices, before VAT (the dashboard's definition). */
-async function revenueOf(companyId: string, range: { start: string; end: string }) {
-  const agg = await prisma.invoice.aggregate({
-    where: {
-      companyId,
-      status: { in: ["sent", "partial", "paid"] },
-      issueDate: { gte: toDate(range.start), lte: toDate(range.end) },
-    },
-    _sum: { subtotal: true },
-  });
-  return agg._sum.subtotal ?? ZERO;
-}
-
 /** Change in percent, or null when there is nothing to compare with. */
 export const changePct = (now: Decimal, before: Decimal) =>
   before.isZero() ? null : now.minus(before).dividedBy(before.abs()).times(100).round().toNumber();
@@ -136,7 +124,7 @@ export async function expenseStats(companyId: string) {
   const month = monthRange(today);
   const prev = monthRange(today, -1);
 
-  const [byMonth, byCategory, due, dueVendors, revenue] = await Promise.all([
+  const [byMonth, byCategory, due, dueVendors, revenueOfMonth] = await Promise.all([
     expensesByMonth(companyId, prev.start),
     prisma.expense.groupBy({
       by: ["category"],
@@ -148,9 +136,11 @@ export async function expenseStats(companyId: string) {
     prisma.$queryRaw<{ count: number }[]>`
       SELECT COUNT(DISTINCT COALESCE("vendor", "id"))::int AS count
       FROM "expenses" WHERE "companyId" = ${companyId} AND "status" = 'due'`,
-    revenueOf(companyId, month),
+    // Revenue of the month, the dashboard's definition (shared helper).
+    revenueByMonth(companyId, month),
   ]);
 
+  const revenue = revenueOfMonth.get(month.start.slice(0, 7)) ?? ZERO;
   const total = byMonth.get(month.start.slice(0, 7)) ?? ZERO;
   const prevTotal = byMonth.get(prev.start.slice(0, 7)) ?? ZERO;
   const categories = byCategory
