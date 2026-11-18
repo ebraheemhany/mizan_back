@@ -40,7 +40,11 @@ export const createInvoiceSchema = z.object({
 export const recordPaymentSchema = z.object({
   amount: decimal(2).refine((v) => Number(v) > 0, "Must be more than 0"),
   date: isoDate,
-  method: z.enum(["cash", "bank", "card"]),
+  method: z.enum(["cash", "bank", "card", "instapay", "vodafoneCash", "cheque"]),
+  /** Where the money went in (bank account, cash box, e-wallet). */
+  account: z.enum(["bank", "cashbox", "wallet"]).nullable().optional(),
+  /** Transfer or cheque number. */
+  reference: optionalText(100),
   note: optionalText(200),
 });
 

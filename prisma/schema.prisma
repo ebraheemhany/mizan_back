@@ -39,6 +39,8 @@ model Company {
   invoiceNextNumber Int    @default(1)
   quotePrefix       String @default("Q-")
   quoteNextNumber   Int    @default(1)
+  // Receipts: PAY-0001, PAY-0002...
+  paymentNextNumber Int    @default(1)
   paymentTermsDays  Int    @default(30)
 
   // Invoice look.
@@ -57,6 +59,7 @@ model Company {
   customers   Customer[]
   products    Product[]
   invoices    Invoice[]
+  payments    InvoicePayment[]
 
   @@map("companies")
 }
@@ -233,8 +236,25 @@ enum InvoiceStatus {
 
 enum PaymentMethod {
   cash
+  // Bank transfer.
   bank
   card
+  instapay
+  vodafoneCash
+  cheque
+}
+
+// A cheque stays pending until it clears; everything else is cleared at once.
+enum PaymentStatus {
+  cleared
+  pending
+}
+
+// Where the money went in.
+enum ReceivingAccount {
+  bank
+  cashbox
+  wallet
 }
 
 enum InvoiceEventType {
@@ -243,6 +263,7 @@ enum InvoiceEventType {
   viewed
   reminderSent
   payment
+  paymentRemoved
   cancelled
 }
 
@@ -323,20 +344,30 @@ model InvoiceLine {
 }
 
 model InvoicePayment {
-  id        String        @id @default(uuid())
-  amount    Decimal       @db.Decimal(14, 2)
-  date      DateTime      @db.Date
+  id        String            @id @default(uuid())
+  // Sequential per company (shown as PAY-0001).
+  number    Int
+  amount    Decimal           @db.Decimal(14, 2)
+  date      DateTime          @db.Date
   method    PaymentMethod
+  status    PaymentStatus     @default(cleared)
+  account   ReceivingAccount?
+  // Transfer or cheque number.
+  reference String?
   note      String?
-  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  clearedAt DateTime?         @db.Timestamptz(3)
+  createdAt DateTime          @default(now()) @db.Timestamptz(3)
 
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   invoiceId   String
   invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
+  @@unique([companyId, number])
   @@index([invoiceId])
-  @@index([date])
+  @@index([companyId, date])
   @@map("invoice_payments")
 }
 

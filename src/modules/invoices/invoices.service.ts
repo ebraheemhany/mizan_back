@@ -109,7 +109,17 @@ const detailSelect = {
   },
   payments: {
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-    select: { id: true, amount: true, date: true, method: true, note: true },
+    select: {
+      id: true,
+      number: true,
+      amount: true,
+      date: true,
+      method: true,
+      status: true,
+      account: true,
+      reference: true,
+      note: true,
+    },
   },
   events: {
     orderBy: { createdAt: "desc" },
@@ -171,6 +181,10 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
       amount: moneyString(p.amount),
       date: toIso(p.date),
       method: p.method,
+      number: paymentNumber(p.number),
+      status: p.status,
+      account: p.account,
+      reference: p.reference,
       note: p.note,
     })),
     sentAt: row.sentAt,
@@ -311,7 +325,8 @@ export async function invoiceStats(companyId: string) {
   const lastMonth = monthRange(today, -1);
   const collected = (range: { start: string; end: string }) =>
     prisma.invoicePayment.aggregate({
-      where: { invoice: { companyId }, date: { gte: toDate(range.start), lte: toDate(range.end) } },
+      // A cheque counts as collected only once it has cleared.
+      where: { companyId, status: "cleared", date: { gte: toDate(range.start), lte: toDate(range.end) } },
       _sum: { amount: true },
     });
 
@@ -489,11 +504,23 @@ export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
 // Payments
 // ---------------------------------------------------------------------------
 
+/** Receipt number as shown: PAY-0001. */
+export const paymentNumber = (n: number) => `PAY-${String(n).padStart(4, "0")}`;
+
 export async function recordPayment(actor: Actor, ref: InvoiceRef, input: RecordPaymentInput) {
+  await applyPayment(actor, ref, input);
+  return getInvoice(actor.companyId, ref);
+}
+
+/**
+ * Records a payment on an invoice and returns the new payment's id.
+ * Also used by the payments page (POST /api/payments).
+ */
+export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordPaymentInput) {
   const amount = money(input.amount);
   const today = businessToday();
 
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const row = await findRow(tx, actor.companyId, ref, {
       id: true,
       status: true,
@@ -524,23 +551,43 @@ export async function recordPayment(actor: Actor, ref: InvoiceRef, input: Record
       throw new AppError(400, "PAYMENT_EXCEEDS_BALANCE", "The payment is more than what is still owed", { field: "amount" });
     }
 
-    await tx.invoicePayment.create({
+    // Receipt number, taken the same way as invoice numbers (the update locks the row).
+    const company = await tx.company.update({
+      where: { id: actor.companyId },
+      data: { paymentNextNumber: { increment: 1 } },
+      select: { paymentNextNumber: true },
+    });
+    // A cheque lowers what is owed straight away but only counts as collected once it clears.
+    const pending = input.method === "cheque";
+
+    const payment = await tx.invoicePayment.create({
       data: {
+        number: company.paymentNextNumber - 1,
         invoiceId: row.id,
+        companyId: actor.companyId,
         amount,
         date: toDate(input.date),
         method: input.method,
+        status: pending ? "pending" : "cleared",
+        clearedAt: pending ? null : new Date(),
+        account: input.account ?? null,
+        reference: input.reference ?? null,
         note: input.note ?? null,
         createdById: actor.id,
       },
+      select: { id: true, number: true },
     });
     await tx.invoiceEvent.create({
-      data: { invoiceId: row.id, type: "payment", values: { amount: moneyString(amount) }, userId: actor.id },
+      data: {
+        invoiceId: row.id,
+        type: "payment",
+        values: { amount: moneyString(amount), payment: paymentNumber(payment.number) },
+        userId: actor.id,
+      },
     });
     await moveCustomerBalance(tx, row.customerId, amount.negated());
+    return payment.id;
   });
-
-  return getInvoice(actor.companyId, ref);
 }
 
 // ---------------------------------------------------------------------------
