@@ -236,6 +236,8 @@ const startDatePassed = () =>
 const notActive = () => new AppError(409, "RECURRING_NOT_ACTIVE", "Only an active recurring invoice can be paused");
 const notPaused = () => new AppError(409, "RECURRING_NOT_PAUSED", "Only a paused recurring invoice can be resumed");
 const ended = () => new AppError(409, "RECURRING_ENDED", "This recurring invoice has ended and can't be changed");
+const changedMeanwhile = () =>
+  new AppError(409, "RECURRING_CHANGED", "The recurring invoice made an invoice meanwhile; open it again and retry");
 
 async function assertCustomer(companyId: string, customerId: string) {
   const found = await prisma.customer.count({ where: { id: customerId, companyId } });
@@ -344,7 +346,7 @@ export async function updateRecurring(actor: Actor, id: string, input: Recurring
   await prisma.$transaction(async (tx) => {
     // Not ended meanwhile (a run can end it): the condition is part of the update.
     const { count } = await tx.recurringInvoice.updateMany({
-      where: { id, companyId: actor.companyId, status: { not: "ended" } },
+      where: { id, companyId: actor.companyId, status: { not: "ended" }, nextIndex: existing.nextIndex },
       data: {
         ...templateData(input, totals),
         ...end,
@@ -355,7 +357,10 @@ export async function updateRecurring(actor: Actor, id: string, input: Recurring
         lastError: null,
       },
     });
-    if (count === 0) throw ended();
+    if (count === 0) {
+      const now = await tx.recurringInvoice.findUnique({ where: { id }, select: { status: true } });
+      throw now?.status === "ended" ? ended() : changedMeanwhile();
+    }
     await tx.recurringInvoiceLine.deleteMany({ where: { recurringId: id } });
     await tx.recurringInvoiceLine.createMany({ data: totals.lines.map((line) => ({ ...line, recurringId: id })) });
   });
@@ -499,7 +504,7 @@ export async function runTemplate(id: string, today = businessToday()) {
         // Another run made this one at the same moment: carry on. Anything else: note
         // it on the template (the next run tries again) and stop for now.
         if (!(await alreadyMade())) {
-          const message = err instanceof AppError ? err.code : err instanceof Error ? err.message : String(err);
+          const message = err instanceof AppError ? err.code : "RECURRING_RUN_FAILED";
           await prisma.recurringInvoice.update({ where: { id }, data: { lastError: message, lastRunAt: new Date() } });
           logger.warn({ err, recurringId: id, runDate }, "Recurring invoice could not be made");
           break;
@@ -509,7 +514,7 @@ export async function runTemplate(id: string, today = businessToday()) {
 
     // On to the next date (or the end). Only from the step that was read, so two
     // runs at once move it once.
-    const generatedCount = t.generatedCount + 1;
+    const generatedCount = await prisma.invoice.count({ where: { recurringId: id } });
     const state = stateAt(
       {
         startDate: toIso(t.startDate),
@@ -522,7 +527,14 @@ export async function runTemplate(id: string, today = businessToday()) {
       t.nextIndex + 1,
     );
     await prisma.recurringInvoice.updateMany({
-      where: { id, status: "active", nextIndex: t.nextIndex },
+      where: {
+        id,
+        status: "active",
+        nextIndex: t.nextIndex,
+        nextDate: t.nextDate,
+        startDate: t.startDate,
+        frequency: t.frequency,
+      },
       data: {
         generatedCount,
         lastRunAt: new Date(),
@@ -541,7 +553,7 @@ export async function runDueRecurring(today = businessToday()) {
   const due = await prisma.recurringInvoice.findMany({
     where: { status: "active", nextDate: { lte: toDate(today) } },
     select: { id: true },
-    orderBy: { nextDate: "asc" },
+    orderBy: [{ lastRunAt: { sort: "asc", nulls: "first" } }, { nextDate: "asc" }],
     take: 1000,
   });
   let invoices = 0;

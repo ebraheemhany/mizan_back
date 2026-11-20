@@ -320,6 +320,24 @@ describe("pause, resume, edit, delete", () => {
     expect((await patch(owner.token, template.id, body(customer.id))).body.error.code).toBe("RECURRING_ENDED");
   });
 
+  it("a new schedule that starts on a date already invoiced doesn't count that invoice twice", async () => {
+    const owner = await ownerSession();
+    const customer = await customerOf(owner.token);
+    const template = await create(owner.token, customer.id, { startDate: today(), endMode: "count", occurrences: 2 });
+    expect(template.generatedCount).toBe(1);
+
+    // Monthly -> weekly, still starting today: today's invoice already exists.
+    const res = await patch(owner.token, template.id, body(customer.id, {
+      frequency: "weekly",
+      startDate: today(),
+      endMode: "count",
+      occurrences: 2,
+    }));
+    expect(res.status).toBe(200);
+    expect(res.body.template).toMatchObject({ generatedCount: 1, status: "active", nextDate: addDays(today(), 7) });
+    expect(await prisma.invoice.count()).toBe(1);
+  });
+
   it("deleting a template keeps the invoices it made", async () => {
     const owner = await ownerSession();
     const customer = await customerOf(owner.token);
