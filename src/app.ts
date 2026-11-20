@@ -17,6 +17,7 @@ import { createPublicQuotesRouter, createQuotesRouter } from "./modules/quotes/q
 import { createReportsRouter } from "./modules/reports/reports.routes.js";
 import { createSettingsRouter } from "./modules/settings/settings.routes.js";
 import { createTasksRouter } from "./modules/tasks/tasks.routes.js";
+import { createRecurringRouter } from "./modules/recurring/recurring.routes.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
@@ -58,6 +59,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/expenses", createExpensesRouter());
   app.use("/api/reports", createReportsRouter());
   app.use("/api/tasks", createTasksRouter());
+  app.use("/api/recurring", createRecurringRouter());
   app.use("/api/quotes", createQuotesRouter());
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
 

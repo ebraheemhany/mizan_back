@@ -138,6 +138,7 @@ const detailSelect = {
       invoiceFooter: true,
     },
   },
+  recurring: { select: { id: true, name: true } },
 } satisfies Prisma.InvoiceSelect;
 
 type DetailRow = Prisma.InvoiceGetPayload<{ select: typeof detailSelect }>;
@@ -196,6 +197,8 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
       ? {}
       : {
           publicToken: row.publicToken,
+          // The recurring template that made it, if any.
+          recurring: row.recurring,
           history: row.events.map((e) => ({ id: e.id, type: e.type, at: e.createdAt.toISOString(), values: e.values })),
         }),
   };
@@ -398,7 +401,10 @@ function moveCustomerBalance(db: Tx, customerId: string, delta: Prisma.Decimal) 
   });
 }
 
-export async function createInvoice(actor: Actor, input: CreateInvoiceInput) {
+/** Set when a recurring template makes the invoice: which template, for which scheduled date. */
+export type InvoiceOrigin = { recurringId: string; runDate: string };
+
+export async function createInvoice(actor: Actor, input: CreateInvoiceInput, origin?: InvoiceOrigin) {
   const customer = await prisma.customer.findFirst({
     where: { id: input.customerId, companyId: actor.companyId },
     select: { id: true, name: true, taxNumber: true, email: true, phone: true, city: true },
@@ -453,6 +459,8 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput) {
           companyId: actor.companyId,
           customerId: customer.id,
           createdById: actor.id,
+          recurringId: origin?.recurringId ?? null,
+          recurringRunDate: origin ? toDate(origin.runDate) : null,
           lines: {
             create: input.items.map((item, position) => ({
               position,

@@ -2,13 +2,18 @@ import { config } from "./config.js";
 import { createApp } from "./app.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
+import { startRecurringJob } from "./modules/recurring/recurring.job.js";
 
 const server = createApp().listen(config.PORT, () => {
   logger.info(`Server running on http://localhost:${config.PORT}`);
 });
 
+// Makes the recurring invoices that are due (hourly).
+const stopRecurringJob = startRecurringJob();
+
 function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
+  stopRecurringJob();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

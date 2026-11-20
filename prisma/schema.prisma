@@ -63,6 +63,7 @@ model Company {
   expenses    Expense[]
   tasks       Task[]
   quotes      Quote[]
+  recurring   RecurringInvoice[]
 
   @@map("companies")
 }
@@ -118,6 +119,7 @@ model User {
   createdTasks      Task[]
   createdQuotes     Quote[]
   quoteEvents       QuoteEvent[]
+  createdRecurring  RecurringInvoice[]
 
   @@index([companyId])
   @@map("users")
@@ -149,9 +151,10 @@ model Customer {
   assignedToId String?
   assignedTo   User?   @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
 
-  invoices Invoice[]
-  tasks    Task[]
-  quotes   Quote[]
+  invoices  Invoice[]
+  tasks     Task[]
+  quotes    Quote[]
+  recurring RecurringInvoice[]
 
   @@index([companyId, lastActivityAt])
   @@index([companyId, name])
@@ -228,8 +231,9 @@ model Product {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  invoiceLines InvoiceLine[]
-  quoteLines   QuoteLine[]
+  invoiceLines   InvoiceLine[]
+  quoteLines     QuoteLine[]
+  recurringLines RecurringInvoiceLine[]
 
   @@unique([companyId, code])
   @@index([companyId, createdAt])
@@ -329,7 +333,14 @@ model Invoice {
   // The accepted quote this invoice was made from, if any.
   quote    Quote?
 
+  // Made by a recurring template: which one, and for which scheduled date. One
+  // invoice per template and date (the unique key makes a repeated run harmless).
+  recurringId      String?
+  recurring        RecurringInvoice? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  recurringRunDate DateTime?         @db.Date
+
   @@unique([companyId, number])
+  @@unique([recurringId, recurringRunDate])
   @@index([companyId, status])
   @@index([companyId, issueDate])
   @@index([customerId])
@@ -598,4 +609,94 @@ model QuoteEvent {
 
   @@index([quoteId])
   @@map("quote_events")
+}
+
+enum RecurringFrequency {
+  weekly
+  monthly
+  quarterly
+  yearly
+}
+
+enum RecurringStatus {
+  active
+  paused
+  ended
+}
+
+enum RecurringEndMode {
+  never
+  date
+  count
+}
+
+// A template that makes the same invoice on a schedule (every week, month, quarter or
+// year). A job makes each due invoice on its scheduled date.
+model RecurringInvoice {
+  id        String             @id @default(uuid())
+  name      String
+  frequency RecurringFrequency
+  // The first scheduled date. The k-th date is computed from it (startDate + k steps),
+  // so a monthly schedule from the 31st doesn't drift after a short month.
+  startDate DateTime           @db.Date
+  // Which scheduled date comes next (k), and that date; null once it has ended.
+  nextIndex Int                @default(0)
+  nextDate  DateTime?          @db.Date
+  endMode   RecurringEndMode   @default(never)
+  // endMode date: no invoice after this day. endMode count: this many invoices in all.
+  endDate   DateTime?          @db.Date
+  maxCount  Int?
+  status    RecurringStatus    @default(active)
+
+  // Copied onto each invoice.
+  paymentTermsDays Int
+  autoSend         Boolean
+  notes            String?
+
+  // Per invoice, with the VAT setting in force when the template was saved (each
+  // invoice is worked out again when it is made).
+  subtotal Decimal @db.Decimal(14, 2)
+  vatRate  Decimal @db.Decimal(5, 2)
+  vat      Decimal @db.Decimal(14, 2)
+  total    Decimal @db.Decimal(14, 2)
+
+  generatedCount Int       @default(0)
+  lastRunAt      DateTime? @db.Timestamptz(3)
+  // Why the last attempt to make an invoice failed (cleared on success).
+  lastError      String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  lines    RecurringInvoiceLine[]
+  invoices Invoice[]
+
+  @@index([companyId, status])
+  @@index([status, nextDate])
+  @@index([customerId])
+  @@map("recurring_invoices")
+}
+
+model RecurringInvoiceLine {
+  id          String  @id @default(uuid())
+  position    Int
+  description String
+  quantity    Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  amount      Decimal @db.Decimal(14, 2)
+
+  recurringId String
+  recurring   RecurringInvoice @relation(fields: [recurringId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([recurringId])
+  @@map("recurring_invoice_lines")
 }

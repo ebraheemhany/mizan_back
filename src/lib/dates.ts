@@ -39,6 +39,16 @@ export function addDays(iso: string, days: number) {
   return toIso(new Date(toDate(iso).getTime() + days * DAY_MS));
 }
 
+/**
+ * `iso` plus whole months, keeping the day of the month; a day the target month
+ * doesn't have becomes its last day (Jan 31 + 1 month = Feb 28 or 29).
+ */
+export function addMonths(iso: string, months: number) {
+  const [y, m, d] = iso.split("-").map(Number) as [number, number, number];
+  const lastDay = new Date(Date.UTC(y, m - 1 + months + 1, 0)).getUTCDate();
+  return toIso(new Date(Date.UTC(y, m - 1 + months, Math.min(d, lastDay))));
+}
+
 /** Whole days from `from` to `to` (positive when `to` is later). */
 export function daysBetween(from: string, to: string) {
   return Math.round((toDate(to).getTime() - toDate(from).getTime()) / DAY_MS);
