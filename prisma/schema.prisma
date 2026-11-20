@@ -61,6 +61,7 @@ model Company {
   invoices    Invoice[]
   payments    InvoicePayment[]
   expenses    Expense[]
+  tasks       Task[]
 
   @@map("companies")
 }
@@ -113,6 +114,7 @@ model User {
   invoicePayments   InvoicePayment[]
   invoiceEvents     InvoiceEvent[]
   expenses          Expense[]
+  createdTasks      Task[]
 
   @@index([companyId])
   @@map("users")
@@ -145,6 +147,7 @@ model Customer {
   assignedTo   User?   @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
 
   invoices Invoice[]
+  tasks    Task[]
 
   @@index([companyId, lastActivityAt])
   @@index([companyId, name])
@@ -436,4 +439,47 @@ model Expense {
   @@index([companyId, date])
   @@index([companyId, status])
   @@map("expenses")
+}
+
+enum TaskPriority {
+  urgent
+  important
+  normal
+}
+
+enum TaskKind {
+  meeting
+  quote
+  collection
+  visit
+  deadline
+  admin
+}
+
+// A to-do for the team (call a customer, chase a payment, prepare a quote...).
+model Task {
+  id          String       @id @default(uuid())
+  title       String
+  dueDate     DateTime     @db.Date
+  priority    TaskPriority @default(normal)
+  kind        TaskKind     @default(admin)
+  // The Cairo business date it was marked done (null while open).
+  completedOn DateTime?    @db.Date
+  completedAt DateTime?    @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // Optional link to a customer; the task stays if the customer is deleted.
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, dueDate])
+  @@index([companyId, completedOn])
+  @@index([customerId])
+  @@map("tasks")
 }

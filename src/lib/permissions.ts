@@ -14,6 +14,8 @@ const PERMISSIONS = {
   recordPayments: ["owner", "accountant"],
   expenses: ["owner", "accountant"],
   reports: ["owner", "accountant"],
+  // Adding, editing and completing tasks; every role can read them.
+  tasks: ["owner", "accountant", "sales"],
   settings: ["owner"],
   deleteData: ["owner"],
 } as const satisfies Record<string, readonly Role[]>;

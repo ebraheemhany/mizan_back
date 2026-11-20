@@ -15,6 +15,7 @@ import { createPaymentsRouter } from "./modules/payments/payments.routes.js";
 import { createProductsRouter } from "./modules/products/products.routes.js";
 import { createReportsRouter } from "./modules/reports/reports.routes.js";
 import { createSettingsRouter } from "./modules/settings/settings.routes.js";
+import { createTasksRouter } from "./modules/tasks/tasks.routes.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
@@ -55,6 +56,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/dashboard", createDashboardRouter());
   app.use("/api/expenses", createExpensesRouter());
   app.use("/api/reports", createReportsRouter());
+  app.use("/api/tasks", createTasksRouter());
 
   app.use(notFound);
   app.use(errorHandler);
