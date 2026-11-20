@@ -104,6 +104,17 @@ export async function updateSettings(companyId: string, input: UpdateSettingsInp
         { field: "invoiceNext", minimum: _max.number + 1 },
       );
     }
+    // Same rule for quote numbers.
+    const quotes = await prisma.quote.aggregate({ where: { companyId }, _max: { number: true } });
+    const lastQuote = quotes._max.number;
+    if (lastQuote !== null && input.numbering.quoteNext <= lastQuote) {
+      throw new AppError(
+        409,
+        "QUOTE_NUMBER_USED",
+        `Quote number ${lastQuote} is already used; the next number must be ${lastQuote + 1} or more`,
+        { field: "quoteNext", minimum: lastQuote + 1 },
+      );
+    }
     data.invoicePrefix = input.numbering.invoicePrefix;
     data.invoiceNextNumber = input.numbering.invoiceNext;
     data.quotePrefix = input.numbering.quotePrefix;

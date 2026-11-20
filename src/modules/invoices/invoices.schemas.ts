@@ -13,17 +13,19 @@ const decimal = (maxDecimals: number) =>
       .regex(new RegExp(`^\\d{1,12}(\\.\\d{1,${maxDecimals}})?$`), `Must be a number with up to ${maxDecimals} decimals`),
   );
 
-const optionalText = (max: number) =>
+export const optionalText = (max: number) =>
   z.preprocess(
     (v) => (typeof v === "string" ? (v.trim() === "" ? null : v.trim()) : v),
     z.string().max(max).nullable().optional(),
   );
 
-const lineSchema = z.object({
+/** One line of an invoice or a quote. */
+export const lineSchema = z.object({
   description: z.string().trim().min(1).max(500),
   quantity: decimal(3).refine((v) => Number(v) > 0, "Must be more than 0"),
   unitPrice: decimal(2),
-  productId: z.uuid().optional(),
+  // null is accepted too (a line copied from a quote with no catalog item).
+  productId: z.uuid().nullable().optional(),
 });
 
 export const createInvoiceSchema = z.object({
@@ -35,6 +37,13 @@ export const createInvoiceSchema = z.object({
   notes: optionalText(500),
   /** true = issue it now ("save and send"); false = keep it as a draft. */
   send: z.boolean().default(false),
+  /**
+   * The number of an accepted quote this invoice is made from. The quote is marked
+   * converted in the same transaction (a quote converts once).
+   */
+  fromQuote: z
+    .preprocess((v) => (typeof v === "string" && /^\d{1,9}$/.test(v.trim()) ? Number(v) : v), z.number().int().min(1))
+    .optional(),
 });
 
 export const recordPaymentSchema = z.object({

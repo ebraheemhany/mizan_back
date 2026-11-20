@@ -16,6 +16,9 @@ const PERMISSIONS = {
   reports: ["owner", "accountant"],
   // Adding, editing and completing tasks; every role can read them.
   tasks: ["owner", "accountant", "sales"],
+  // Writing quotes (create, edit, send, accept/reject, duplicate, delete a draft);
+  // every role can read them. Converting one needs issueInvoices (it makes an invoice).
+  quotes: ["owner", "accountant", "sales"],
   settings: ["owner"],
   deleteData: ["owner"],
 } as const satisfies Record<string, readonly Role[]>;

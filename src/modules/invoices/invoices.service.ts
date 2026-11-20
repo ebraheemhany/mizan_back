@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { Decimal, invoiceTotals, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { markQuoteConverted } from "../quotes/quote-conversion.js";
 import type { CreateInvoiceInput, ListInvoicesQuery, RecordPaymentInput, ReminderInput } from "./invoices.schemas.js";
 
 /** Egypt's standard VAT rate, used when VAT is on in the company settings. */
@@ -427,10 +428,11 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput) {
       const vatRate = company.vatEnabled ? VAT_RATE : 0;
       const { amounts, subtotal, vat, total } = invoiceTotals(input.items, vatRate);
       const now = Date.now();
+      const number = company.invoiceNextNumber - 1;
 
       const invoice = await tx.invoice.create({
         data: {
-          number: company.invoiceNextNumber - 1,
+          number,
           numberPrefix: company.invoicePrefix,
           status: input.send ? "sent" : "draft",
           issueDate: toDate(input.issueDate),
@@ -472,6 +474,16 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput) {
         },
         select: { id: true },
       });
+
+      // Made from an accepted quote: mark it converted, or fail and roll this invoice back.
+      if (input.fromQuote !== undefined) {
+        await markQuoteConverted(tx, actor, input.fromQuote, {
+          id: invoice.id,
+          number,
+          displayNumber: `${company.invoicePrefix}${number}`,
+          customerId: customer.id,
+        });
+      }
 
       // A draft owes nothing yet; a sent invoice adds its total to the customer's balance.
       await moveCustomerBalance(tx, customer.id, input.send ? total : ZERO);

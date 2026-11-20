@@ -62,6 +62,7 @@ model Company {
   payments    InvoicePayment[]
   expenses    Expense[]
   tasks       Task[]
+  quotes      Quote[]
 
   @@map("companies")
 }
@@ -115,6 +116,8 @@ model User {
   invoiceEvents     InvoiceEvent[]
   expenses          Expense[]
   createdTasks      Task[]
+  createdQuotes     Quote[]
+  quoteEvents       QuoteEvent[]
 
   @@index([companyId])
   @@map("users")
@@ -148,6 +151,7 @@ model Customer {
 
   invoices Invoice[]
   tasks    Task[]
+  quotes   Quote[]
 
   @@index([companyId, lastActivityAt])
   @@index([companyId, name])
@@ -225,6 +229,7 @@ model Product {
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   invoiceLines InvoiceLine[]
+  quoteLines   QuoteLine[]
 
   @@unique([companyId, code])
   @@index([companyId, createdAt])
@@ -321,6 +326,8 @@ model Invoice {
   lines    InvoiceLine[]
   payments InvoicePayment[]
   events   InvoiceEvent[]
+  // The accepted quote this invoice was made from, if any.
+  quote    Quote?
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -482,4 +489,113 @@ model Task {
   @@index([companyId, completedOn])
   @@index([customerId])
   @@map("tasks")
+}
+
+enum QuoteStatus {
+  draft
+  sent
+  accepted
+  rejected
+}
+
+enum QuoteEventType {
+  created
+  sent
+  accepted
+  rejected
+  converted
+}
+
+// A price offer (عرض سعر). "expired" is not a stored status: a sent quote whose
+// validUntil is before today (Africa/Cairo) is expired, worked out when reading.
+model Quote {
+  id           String      @id @default(uuid())
+  // Sequential per company, assigned on creation from the company's quoteNextNumber.
+  number       Int
+  // The prefix in force when the quote was created (Q-), shown as Q-212.
+  numberPrefix String
+  status       QuoteStatus @default(draft)
+
+  issueDate  DateTime @db.Date
+  validUntil DateTime @db.Date
+
+  // Customer details as they were when the quote was written (kept if the
+  // customer is edited or deleted later).
+  customerName      String
+  customerTaxNumber String?
+  customerEmail     String?
+  customerPhone     String?
+  customerCity      String?
+
+  subtotal Decimal @db.Decimal(14, 2)
+  // Percent: 14 means 14%. 0 when VAT is off in the settings.
+  vatRate  Decimal @db.Decimal(5, 2)
+  vat      Decimal @db.Decimal(14, 2)
+  total    Decimal @db.Decimal(14, 2)
+
+  notes       String?
+  // Random token for the public link (/q/<token>). Set when the quote is sent.
+  publicToken String?   @unique
+  sentAt      DateTime? @db.Timestamptz(3)
+  // When it was accepted or rejected, and by whom: "customer" (public link) or "user".
+  decidedAt   DateTime? @db.Timestamptz(3)
+  decidedBy   String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  companyId          String
+  company            Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // Cleared if the customer is deleted; the snapshot above keeps the name.
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // The invoice made from this quote (set once, when it is converted).
+  convertedInvoiceId String?   @unique
+  convertedInvoice   Invoice?  @relation(fields: [convertedInvoiceId], references: [id], onDelete: SetNull)
+  createdById        String?
+  createdBy          User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  lines  QuoteLine[]
+  events QuoteEvent[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, issueDate])
+  @@index([customerId])
+  @@map("quotes")
+}
+
+model QuoteLine {
+  id          String  @id @default(uuid())
+  position    Int
+  description String
+  quantity    Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  // quantity x unitPrice, rounded to 2 decimals.
+  amount      Decimal @db.Decimal(14, 2)
+
+  quoteId   String
+  quote     Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  // Optional link to the catalog; the line keeps its own text and price.
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@map("quote_lines")
+}
+
+// The quote's history timeline (created, sent, accepted...).
+model QuoteEvent {
+  id        String         @id @default(uuid())
+  type      QuoteEventType
+  values    Json           @default("{}")
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+
+  quoteId String
+  quote   Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  // null when the customer answered through the public link.
+  userId  String?
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@map("quote_events")
 }

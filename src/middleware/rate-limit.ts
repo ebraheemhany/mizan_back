@@ -49,6 +49,8 @@ export type AuthRateLimiters = {
   changePassword: RequestHandler;
   /** Bad invite tokens from one IP (public preview/accept endpoints). */
   invitationToken: RequestHandler;
+  /** Accept/reject answers on public quote links from one IP (no login on that page). */
+  publicQuoteAnswer: RequestHandler;
 };
 
 /**
@@ -64,6 +66,7 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       register: passThrough,
       changePassword: passThrough,
       invitationToken: passThrough,
+      publicQuoteAnswer: passThrough,
     };
   }
 
@@ -98,6 +101,12 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       limit: 20,
       onlyFailures: true,
       key: (req) => `invitation:${clientIp(req)}`,
+    }),
+    publicQuoteAnswer: createLimiter({
+      windowMs: 15 * MINUTE,
+      limit: 30,
+      onlyFailures: false,
+      key: (req) => `public-quote:${clientIp(req)}`,
     }),
   };
 }

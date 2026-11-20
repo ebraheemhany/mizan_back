@@ -105,3 +105,15 @@ describe("change-password rate limit", () => {
     expect((await change(otherSession.accessToken, PASSWORD)).status).toBe(200);
   });
 });
+
+describe("public quote answers rate limit", () => {
+  it("blocks an IP after 30 accept/reject requests in the window; viewing stays open", async () => {
+    const token = "x".repeat(43);
+    for (let i = 0; i < 30; i++) {
+      const path = i % 2 === 0 ? "accept" : "reject";
+      expect((await api().post(`/api/public/quotes/${token}/${path}`)).status).toBe(404);
+    }
+    expectBlocked(await api().post(`/api/public/quotes/${token}/accept`));
+    expect((await api().get(`/api/public/quotes/${token}`)).status).toBe(404);
+  });
+});
