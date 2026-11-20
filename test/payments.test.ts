@@ -170,6 +170,23 @@ describe("payments list, stats, open invoices", () => {
     const stats = (await api().get("/api/payments/stats").set(auth(owner.token))).body.stats;
     expect(stats).toMatchObject({ awaiting: "3140.00", awaitingCount: 2, avgDaysToCollect: 0 });
   });
+
+  it("open invoices name the customer as they are now (renamed after the invoice)", async () => {
+    const { owner, customer, invoice } = await setup();
+    const inv = await invoice();
+    const renamed = await api()
+      .patch(`/api/customers/${customer.id}`)
+      .set(auth(owner.token))
+      .send({ name: "النيل للتجارة", phone: "01111111111" });
+    expect(renamed.status).toBe(200);
+
+    const [row] = (await api().get("/api/payments/open-invoices").set(auth(owner.token))).body.invoices;
+    expect(row).toMatchObject({ customer: "النيل للتجارة", customerPhone: "01111111111" });
+    // The invoice itself keeps the name it was issued with.
+    expect((await api().get(`/api/invoices/${inv.number}`).set(auth(owner.token))).body.invoice.client.name).toBe(
+      "شركة النيل",
+    );
+  });
 });
 
 describe("permissions and isolation", () => {

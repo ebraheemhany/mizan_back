@@ -191,8 +191,10 @@ export async function openInvoices(companyId: string) {
       number: true,
       numberPrefix: true,
       customerId: true,
-      customerName: true,
       customerPhone: true,
+      // Who owes it today: the customer's current name and phone (the invoice keeps
+      // the ones it was issued with), so a renamed customer shows one name everywhere.
+      customer: { select: { name: true, phone: true } },
       issueDate: true,
       dueDate: true,
       total: true,
@@ -217,8 +219,8 @@ export async function openInvoices(companyId: string) {
       number: r.number,
       displayNumber: `${r.numberPrefix}${r.number}`,
       customerId: r.customerId,
-      customer: r.customerName,
-      customerPhone: r.customerPhone,
+      customer: r.customer.name,
+      customerPhone: r.customer.phone ?? r.customerPhone,
       balance: moneyString(r.total.minus(r.amountPaid)),
       issueDate: toIso(r.issueDate),
       dueDate: due,
