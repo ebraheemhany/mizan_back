@@ -316,6 +316,20 @@ describe("GET /api/reports/summary", () => {
     });
   });
 
+  it("this quarter / this year count up to this month: an expense entered ahead of time waits for its month", async () => {
+    const c = await company();
+    await c.expense("rent", "500");
+    await c.expense("rent", "9000", { date: monthStart(1), status: "due" }); // next month's rent, entered now
+
+    for (const period of ["thisQuarter", "thisYear"]) {
+      const s = (await c.get(`/api/reports/summary?period=${period}`)).body.summary;
+      expect(s.expenses, period).toBe("500.00");
+      expect(s.period.end, period).toBe(period === "thisQuarter" ? quarterRange(today()).end : yearRange(today()).end);
+    }
+    // The month report agrees: this month has only the 500.
+    expect((await c.get("/api/reports/summary")).body.summary.expenses).toBe("500.00");
+  });
+
   it("top customers: at most 5, by revenue, equal revenue by name", async () => {
     const c = await company();
     const make = async (name: string, ...amounts: string[]) => {

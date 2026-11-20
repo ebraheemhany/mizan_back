@@ -20,14 +20,23 @@ const within = (range: Range) => ({ gte: toDate(range.start), lte: toDate(range.
 // ---------------------------------------------------------------------------
 
 function resolvePeriod(key: string | undefined, today: string) {
-  if (key === "thisQuarter") return { key, ...quarterRange(today), previous: quarterRange(today, -1) };
-  if (key === "thisYear") return { key, ...yearRange(today), previous: yearRange(today, -1) };
+  const thisMonthEnd = monthRange(today).end;
+  // "This quarter/year" so far: the months after this one haven't happened yet, so an
+  // expense entered ahead of time (next month's rent) doesn't count before its month.
+  const soFar = (range: Range) => ({ ...range, to: range.end < thisMonthEnd ? range.end : thisMonthEnd });
+  if (key === "thisQuarter") return { key, ...soFar(quarterRange(today)), previous: quarterRange(today, -1) };
+  if (key === "thisYear") return { key, ...soFar(yearRange(today)), previous: yearRange(today, -1) };
   const month = key ?? monthKey(today);
   const first = `${month}-01`;
-  return { key: month, ...monthRange(first), previous: monthRange(first, -1) };
+  // A month is never after the current one (the schema refuses it), so it counts whole.
+  const range = monthRange(first);
+  return { key: month, ...range, to: range.end, previous: monthRange(first, -1) };
 }
 
 type Period = ReturnType<typeof resolvePeriod>;
+
+/** The days a period's figures cover: its start up to `to` (see resolvePeriod). */
+const counted = (p: Period): Range => ({ start: p.start, end: p.to });
 
 const periodDto = (p: Period) => ({ key: p.key, start: p.start, end: p.end });
 
@@ -89,28 +98,28 @@ export async function summary(companyId: string, periodKey: string | undefined) 
   );
   // One revenue and one expenses query cover the period, the previous period and the chart.
   const firstMonth = `${months[0]}-01`;
-  const span = { start: firstMonth < period.previous.start ? firstMonth : period.previous.start, end: period.end };
+  const span = { start: firstMonth < period.previous.start ? firstMonth : period.previous.start, end: period.to };
 
   const [revenueMonths, expenseMonths, byCategory, collected, top] = await Promise.all([
     revenueByMonth(companyId, span),
     expensesByMonth(companyId, span.start),
     prisma.expense.groupBy({
       by: ["category"],
-      where: { companyId, date: within(period) },
+      where: { companyId, date: within(counted(period)) },
       _sum: { amount: true },
     }),
     // Collected = cleared payments only (a pending cheque isn't money in yet).
     prisma.invoicePayment.aggregate({
-      where: { companyId, status: "cleared", date: within(period) },
+      where: { companyId, status: "cleared", date: within(counted(period)) },
       _sum: { amount: true },
     }),
-    topCustomers(companyId, period),
+    topCustomers(companyId, counted(period)),
   ]);
 
   const spent = new Map(byCategory.map((c) => [c.category, c._sum.amount ?? ZERO]));
   const spentOn = (category: ExpenseCategory) => spent.get(category) ?? ZERO;
 
-  const revenue = sumMonths(revenueMonths, period);
+  const revenue = sumMonths(revenueMonths, counted(period));
   const cost = spentOn("purchases");
   const operating = EXPENSE_LINES.filter((l) => l.kind === "expense").reduce((sum, l) => sum.plus(spentOn(l.key)), ZERO);
   const expenses = cost.plus(operating);
@@ -194,7 +203,7 @@ export async function aging(companyId: string) {
       COUNT(*)::int AS "invoiceCount",
       GREATEST(MAX(o.days), 0)::int AS "maxDaysOverdue"
     FROM owed o
-    JOIN "customers" c ON c."id" = o."customerId"
+    JOIN "customers" c ON c."id" = o."customerId" AND c."companyId" = ${companyId}
     GROUP BY c."id", c."name"
     ORDER BY total DESC, c."name" ASC, c."id" ASC`;
 
@@ -240,7 +249,7 @@ export async function vatReport(companyId: string, periodKey: string | undefined
   const issued = {
     companyId,
     status: { in: ISSUED_STATUSES },
-    issueDate: within(period),
+    issueDate: within(counted(period)),
   } satisfies Prisma.InvoiceWhereInput;
 
   const [taxable, exempt] = await prisma.$transaction([
@@ -290,11 +299,11 @@ export async function statement(companyId: string, customerId: string, periodKey
       // A payment is never dated before its invoice, so these are the payments on the invoices above.
       prisma.invoicePayment.aggregate({ where: { companyId, date: before, invoice: issued }, _sum: { amount: true } }),
       prisma.invoice.findMany({
-        where: { ...issued, issueDate: within(period) },
+        where: { ...issued, issueDate: within(counted(period)) },
         select: { id: true, number: true, numberPrefix: true, issueDate: true, total: true },
       }),
       prisma.invoicePayment.findMany({
-        where: { companyId, date: within(period), invoice: issued },
+        where: { companyId, date: within(counted(period)), invoice: issued },
         select: {
           id: true,
           number: true,
