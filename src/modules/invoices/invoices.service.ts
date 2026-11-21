@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { Decimal, invoiceTotals, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit } from "../audit/audit.service.js";
 import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { markQuoteConverted } from "../quotes/quote-conversion.js";
 import type { CreateInvoiceInput, ListInvoicesQuery, RecordPaymentInput, ReminderInput } from "./invoices.schemas.js";
@@ -498,6 +499,23 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput, ori
 
       // A draft owes nothing yet; a sent invoice adds its total to the customer's balance.
       await moveCustomerBalance(tx, customer.id, input.send ? total : ZERO);
+      await audit(
+        tx,
+        actor.companyId,
+        {
+          action: "create",
+          event: origin ? "invoiceMadeRecurring" : input.send ? "invoiceIssued" : "invoiceDrafted",
+          item: { type: "invoice", id: invoice.id, ref: `${company.invoicePrefix}${number}` },
+          values: {
+            number,
+            amount: moneyString(total),
+            customer: customer.name,
+            fromQuote: input.fromQuote !== undefined ? true : undefined,
+          },
+        },
+        // A recurring template's invoice is made by the system, whoever's name it is issued under.
+        origin ? { id: null, name: null } : undefined,
+      );
       return invoice.id;
     });
     return getInvoice(actor.companyId, { id });
@@ -517,7 +535,16 @@ const futureIssueDate = (status: 400 | 409) =>
 export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
   await prisma.$transaction(async (tx) => {
     const closedThrough = await lockBooks(tx, actor.companyId);
-    const row = await findRow(tx, actor.companyId, ref, { id: true, status: true, total: true, customerId: true, issueDate: true });
+    const row = await findRow(tx, actor.companyId, ref, {
+      id: true,
+      status: true,
+      total: true,
+      customerId: true,
+      issueDate: true,
+      number: true,
+      numberPrefix: true,
+      customerName: true,
+    });
     if (row.status === "draft" && toIso(row.issueDate) > businessToday()) throw futureIssueDate(409);
     if (row.status === "draft") checkBooksOpen(closedThrough, [toIso(row.issueDate)]);
     // The status condition makes this safe if two people press "send" at once.
@@ -528,6 +555,12 @@ export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
     if (count === 0) throw new AppError(409, "INVOICE_NOT_DRAFT", "Only a draft can be sent");
     await tx.invoiceEvent.create({ data: { invoiceId: row.id, type: "sent", userId: actor.id } });
     await moveCustomerBalance(tx, row.customerId, row.total);
+    await audit(tx, actor.companyId, {
+      action: "send",
+      event: "invoiceSent",
+      item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: { number: row.number, amount: moneyString(row.total), customer: row.customerName },
+    });
   });
   return getInvoice(actor.companyId, ref);
 }
@@ -566,6 +599,9 @@ export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordP
       status: true,
       issueDate: true,
       customerId: true,
+      number: true,
+      numberPrefix: true,
+      customerName: true,
     });
     if (!OPEN.includes(row.status)) {
       throw new AppError(409, "INVOICE_NOT_PAYABLE", "Payments can only be recorded on a sent, unpaid invoice");
@@ -621,6 +657,18 @@ export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordP
       },
     });
     await moveCustomerBalance(tx, row.customerId, amount.negated());
+    await audit(tx, actor.companyId, {
+      action: "payment",
+      event: "paymentRecorded",
+      item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: {
+        number: row.number,
+        amount: moneyString(amount),
+        payment: paymentNumber(payment.number),
+        method: input.method,
+        customer: row.customerName,
+      },
+    });
     return payment.id;
   });
 }
@@ -650,6 +698,9 @@ export async function cancelInvoice(actor: Actor, ref: InvoiceRef) {
       amountPaid: true,
       customerId: true,
       issueDate: true,
+      number: true,
+      numberPrefix: true,
+      customerName: true,
     });
     if ((row.status !== "draft" && row.status !== "sent") || !row.amountPaid.isZero()) throw notCancellable();
     if (row.status === "sent") checkBooksOpen(closedThrough, [toIso(row.issueDate)]);
@@ -664,6 +715,12 @@ export async function cancelInvoice(actor: Actor, ref: InvoiceRef) {
     await tx.invoiceEvent.create({ data: { invoiceId: row.id, type: "cancelled", userId: actor.id } });
     // A sent invoice was counted in the customer's balance; a draft never was.
     if (row.status === "sent") await moveCustomerBalance(tx, row.customerId, row.total.negated());
+    await audit(tx, actor.companyId, {
+      action: "cancel",
+      event: row.status === "draft" ? "draftCancelled" : "invoiceCancelled",
+      item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: { number: row.number, amount: moneyString(row.total), customer: row.customerName },
+    });
   });
   return getInvoice(actor.companyId, ref);
 }
@@ -687,12 +744,26 @@ export async function bulkCancel(actor: Actor, ids: string[]) {
  * WhatsApp sending come later.
  */
 export async function recordReminder(actor: Actor, ref: InvoiceRef, input: ReminderInput) {
-  const row = await findRow(prisma, actor.companyId, ref, { id: true, status: true });
+  const row = await findRow(prisma, actor.companyId, ref, {
+    id: true,
+    status: true,
+    number: true,
+    numberPrefix: true,
+    customerName: true,
+  });
   if (!OPEN.includes(row.status)) {
     throw new AppError(409, "INVOICE_NOT_REMINDABLE", "Reminders are only for sent invoices that aren't fully paid");
   }
-  await prisma.invoiceEvent.create({
-    data: { invoiceId: row.id, type: "reminderSent", values: { channel: input.channel }, userId: actor.id },
+  await prisma.$transaction(async (tx) => {
+    await tx.invoiceEvent.create({
+      data: { invoiceId: row.id, type: "reminderSent", values: { channel: input.channel }, userId: actor.id },
+    });
+    await audit(tx, actor.companyId, {
+      action: "send",
+      event: "reminderSent",
+      item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: { number: row.number, channel: input.channel, customer: row.customerName },
+    });
   });
   return getInvoice(actor.companyId, ref);
 }

@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { withoutUndefined } from "../../lib/object.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit, changedFields } from "../audit/audit.service.js";
 import { customerInvoiceSummary, overdueWhere } from "../invoices/invoices.service.js";
 import {
   createCustomerSchema,
@@ -159,21 +160,41 @@ async function assertAssignees(companyId: string, ids: (string | null | undefine
 
 export async function createCustomer(companyId: string, input: CreateCustomerInput) {
   await assertAssignees(companyId, [input.assignedToId]);
-  const row = await prisma.customer.create({
-    data: { ...withoutUndefined(input), name: input.name, companyId },
-    select: customerSelect(businessToday()),
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.customer.create({
+      data: { ...withoutUndefined(input), name: input.name, companyId },
+      select: customerSelect(businessToday()),
+    });
+    await audit(tx, companyId, {
+      action: "create",
+      event: "customerCreated",
+      item: { type: "customer", id: created.id, ref: created.name },
+    });
+    return created;
   });
   return toDto(row);
 }
 
 export async function updateCustomer(companyId: string, id: string, input: UpdateCustomerInput) {
   await assertAssignees(companyId, [input.assignedToId]);
-  // updateMany so the company check and the update are one statement.
-  const { count } = await prisma.customer.updateMany({
-    where: { id, companyId },
-    data: { ...withoutUndefined(input), lastActivityAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    const before = await tx.customer.findFirst({ where: { id, companyId } });
+    // updateMany so the company check and the update are one statement.
+    const { count } = await tx.customer.updateMany({
+      where: { id, companyId },
+      data: { ...withoutUndefined(input), lastActivityAt: new Date() },
+    });
+    if (count === 0 || !before) throw notFound("Customer");
+    const fields = changedFields(before as Record<string, unknown>, withoutUndefined(input) as Record<string, unknown>);
+    if (fields.length > 0) {
+      await audit(tx, companyId, {
+        action: "update",
+        event: "customerUpdated",
+        item: { type: "customer", id, ref: input.name ?? before.name },
+        values: { fields },
+      });
+    }
   });
-  if (count === 0) throw notFound("Customer");
   return getCustomer(companyId, id);
 }
 
@@ -184,8 +205,12 @@ const customerHasInvoices = () =>
 
 export async function deleteCustomer(companyId: string, id: string) {
   try {
-    const { count } = await prisma.customer.deleteMany({ where: { id, companyId } });
-    if (count === 0) throw notFound("Customer");
+    await prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.findFirst({ where: { id, companyId }, select: { name: true } });
+      const { count } = await tx.customer.deleteMany({ where: { id, companyId } });
+      if (count === 0 || !customer) throw notFound("Customer");
+      await audit(tx, companyId, { action: "delete", event: "customerDeleted", item: { type: "customer", ref: customer.name } });
+    });
   } catch (err) {
     if (hasInvoices(err)) throw customerHasInvoices();
     throw err;
@@ -198,8 +223,14 @@ export async function deleteCustomer(companyId: string, id: string) {
  */
 export async function bulkDeleteCustomers(companyId: string, ids: string[]) {
   try {
-    const { count } = await prisma.customer.deleteMany({ where: { id: { in: ids }, companyId } });
-    return { deleted: count };
+    return await prisma.$transaction(async (tx) => {
+      const customers = await tx.customer.findMany({ where: { id: { in: ids }, companyId }, select: { name: true } });
+      const { count } = await tx.customer.deleteMany({ where: { id: { in: ids }, companyId } });
+      for (const customer of customers) {
+        await audit(tx, companyId, { action: "delete", event: "customerDeleted", item: { type: "customer", ref: customer.name } });
+      }
+      return { deleted: count };
+    });
   } catch (err) {
     if (hasInvoices(err)) throw customerHasInvoices();
     throw err;
@@ -208,11 +239,24 @@ export async function bulkDeleteCustomers(companyId: string, ids: string[]) {
 
 export async function bulkAssignCustomers(companyId: string, ids: string[], assignedToId: string | null) {
   await assertAssignees(companyId, [assignedToId]);
-  const { count } = await prisma.customer.updateMany({
-    where: { id: { in: ids }, companyId },
-    data: { assignedToId },
+  return prisma.$transaction(async (tx) => {
+    const { count } = await tx.customer.updateMany({
+      where: { id: { in: ids }, companyId },
+      data: { assignedToId },
+    });
+    const assignee = assignedToId
+      ? await tx.user.findUnique({ where: { id: assignedToId }, select: { fullName: true } })
+      : null;
+    if (count > 0) {
+      await audit(tx, companyId, {
+        action: "update",
+        event: "customersAssigned",
+        item: { type: "customer" },
+        values: { count, name: assignee?.fullName ?? null },
+      });
+    }
+    return { updated: count };
   });
-  return { updated: count };
 }
 
 /**
@@ -240,8 +284,11 @@ export async function importCustomers(companyId: string, rows: unknown[]) {
     companyId,
     valid.map((row) => row.assignedToId),
   );
-  const { count } = await prisma.customer.createMany({
-    data: valid.map((row) => ({ ...withoutUndefined(row), name: row.name, companyId })),
+  return prisma.$transaction(async (tx) => {
+    const { count } = await tx.customer.createMany({
+      data: valid.map((row) => ({ ...withoutUndefined(row), name: row.name, companyId })),
+    });
+    await audit(tx, companyId, { action: "create", event: "customersImported", item: { type: "customer" }, values: { count } });
+    return { created: count };
   });
-  return { created: count };
 }

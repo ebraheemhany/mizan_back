@@ -5,6 +5,7 @@ import { logger } from "../../lib/logger.js";
 import { Decimal, invoiceTotals, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit } from "../audit/audit.service.js";
 import { createInvoice, VAT_RATE } from "../invoices/invoices.service.js";
 import type { ListRecurringQuery, RecurringFrequency, RecurringInput } from "./recurring.schemas.js";
 
@@ -298,19 +299,28 @@ export async function createRecurring(actor: Actor, input: RecurringInput) {
   const totals = await priced(actor.companyId, input.items);
   const end = endFields(input);
 
-  const row = await prisma.recurringInvoice.create({
-    data: {
-      ...templateData(input, totals),
-      ...end,
-      endDate: end.endDate ? toDate(end.endDate) : null,
-      nextIndex: 0,
-      nextDate: toDate(input.startDate),
-      status: "active",
-      companyId: actor.companyId,
-      createdById: actor.id,
-      lines: { create: totals.lines },
-    },
-    select: { id: true },
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.recurringInvoice.create({
+      data: {
+        ...templateData(input, totals),
+        ...end,
+        endDate: end.endDate ? toDate(end.endDate) : null,
+        nextIndex: 0,
+        nextDate: toDate(input.startDate),
+        status: "active",
+        companyId: actor.companyId,
+        createdById: actor.id,
+        lines: { create: totals.lines },
+      },
+      select: { id: true },
+    });
+    await audit(tx, actor.companyId, {
+      action: "create",
+      event: "recurringCreated",
+      item: { type: "recurring", id: created.id, ref: input.name },
+      values: { frequency: input.frequency, amount: moneyString(totals.total), startDate: input.startDate },
+    });
+    return created;
   });
 
   // Starting today: the first invoice is made right away.
@@ -363,6 +373,12 @@ export async function updateRecurring(actor: Actor, id: string, input: Recurring
     }
     await tx.recurringInvoiceLine.deleteMany({ where: { recurringId: id } });
     await tx.recurringInvoiceLine.createMany({ data: totals.lines.map((line) => ({ ...line, recurringId: id })) });
+    await audit(tx, actor.companyId, {
+      action: "update",
+      event: "recurringUpdated",
+      item: { type: "recurring", id, ref: input.name },
+      values: { frequency: input.frequency, amount: moneyString(totals.total), restarted: restart || undefined },
+    });
   });
 
   await runTemplate(id, today);
@@ -370,9 +386,16 @@ export async function updateRecurring(actor: Actor, id: string, input: Recurring
 }
 
 export async function pauseRecurring(actor: Actor, id: string) {
-  const { count } = await prisma.recurringInvoice.updateMany({
-    where: { id, companyId: actor.companyId, status: "active" },
-    data: { status: "paused" },
+  const count = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.recurringInvoice.updateMany({
+      where: { id, companyId: actor.companyId, status: "active" },
+      data: { status: "paused" },
+    });
+    if (count > 0) {
+      const t = await tx.recurringInvoice.findUniqueOrThrow({ where: { id }, select: { name: true } });
+      await audit(tx, actor.companyId, { action: "update", event: "recurringPaused", item: { type: "recurring", id, ref: t.name } });
+    }
+    return count;
   });
   if (count === 0) {
     await getRecurring(actor.companyId, id); // 404 if it isn't there
@@ -409,13 +432,21 @@ export async function resumeRecurring(actor: Actor, id: string) {
     generatedCount: row.generatedCount,
   };
   const state = stateAt(schedule, firstIndexFrom(schedule, today, row.nextIndex));
-  const { count } = await prisma.recurringInvoice.updateMany({
-    where: { id, companyId: actor.companyId, status: "paused" },
-    data: state.ended
-      ? { status: "ended", nextDate: null }
-      : { status: "active", nextIndex: state.nextIndex, nextDate: toDate(state.nextDate), lastError: null },
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.recurringInvoice.updateMany({
+      where: { id, companyId: actor.companyId, status: "paused" },
+      data: state.ended
+        ? { status: "ended", nextDate: null }
+        : { status: "active", nextIndex: state.nextIndex, nextDate: toDate(state.nextDate), lastError: null },
+    });
+    if (count === 0) throw notPaused();
+    const t = await tx.recurringInvoice.findUniqueOrThrow({ where: { id }, select: { name: true } });
+    await audit(tx, actor.companyId, {
+      action: "update",
+      event: state.ended ? "recurringEnded" : "recurringResumed",
+      item: { type: "recurring", id, ref: t.name },
+    });
   });
-  if (count === 0) throw notPaused();
 
   await runTemplate(id, today);
   return getRecurring(actor.companyId, id);
@@ -423,8 +454,20 @@ export async function resumeRecurring(actor: Actor, id: string) {
 
 /** The invoices it already made stay (they just lose the link to the template). */
 export async function deleteRecurring(actor: Actor, id: string) {
-  const { count } = await prisma.recurringInvoice.deleteMany({ where: { id, companyId: actor.companyId } });
-  if (count === 0) throw notFound("Recurring invoice");
+  await prisma.$transaction(async (tx) => {
+    const t = await tx.recurringInvoice.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: { name: true, generatedCount: true },
+    });
+    const { count } = await tx.recurringInvoice.deleteMany({ where: { id, companyId: actor.companyId } });
+    if (count === 0 || !t) throw notFound("Recurring invoice");
+    await audit(tx, actor.companyId, {
+      action: "delete",
+      event: "recurringDeleted",
+      item: { type: "recurring", ref: t.name },
+      values: { count: t.generatedCount },
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

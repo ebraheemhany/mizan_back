@@ -1,6 +1,7 @@
 import type { Prisma } from "../../generated/prisma/client.js";
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit } from "../audit/audit.service.js";
 import { integrationsSection, notificationsSection, type UpdateSettingsInput } from "./settings.schemas.js";
 
 const settingsSelect = {
@@ -128,6 +129,15 @@ export async function updateSettings(companyId: string, input: UpdateSettingsInp
   if (input.notifications) data.notifications = input.notifications;
   if (input.integrations) data.integrations = input.integrations;
 
-  const row = await prisma.company.update({ where: { id: companyId }, data, select: settingsSelect });
+  const row = await prisma.$transaction(async (tx) => {
+    const updated = await tx.company.update({ where: { id: companyId }, data, select: settingsSelect });
+    await audit(tx, companyId, {
+      action: "settings",
+      event: "settingsUpdated",
+      item: { type: "company", id: companyId, ref: updated.name },
+      values: { sections: Object.keys(input).filter((k) => input[k as keyof UpdateSettingsInput] !== undefined) },
+    });
+    return updated;
+  });
   return toDto(row);
 }

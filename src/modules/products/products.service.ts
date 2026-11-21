@@ -3,6 +3,7 @@ import { Prisma, type ProductType } from "../../generated/prisma/client.js";
 import { AppError } from "../../lib/errors.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit, changedFields } from "../audit/audit.service.js";
 import {
   createProductSchema,
   type CreateProductInput,
@@ -116,18 +117,27 @@ export async function nextCode(companyId: string, type: ProductType) {
 
 export async function createProduct(companyId: string, input: CreateProductInput) {
   try {
-    const row = await prisma.product.create({
-      data: {
-        name: input.name,
-        type: input.type,
-        code: input.code,
-        price: input.price,
-        taxRate: input.taxRate,
-        category: input.category,
-        ...stockFor(input.type, input.stock, input.lowStockAt),
-        companyId,
-      },
-      select: productSelect,
+    const row = await prisma.$transaction(async (tx) => {
+      const created = await tx.product.create({
+        data: {
+          name: input.name,
+          type: input.type,
+          code: input.code,
+          price: input.price,
+          taxRate: input.taxRate,
+          category: input.category,
+          ...stockFor(input.type, input.stock, input.lowStockAt),
+          companyId,
+        },
+        select: productSelect,
+      });
+      await audit(tx, companyId, {
+        action: "create",
+        event: "productCreated",
+        item: { type: "product", id: created.id, ref: created.name },
+        values: { code: created.code, price: String(created.price) },
+      });
+      return created;
     });
     return toDto(row);
   } catch (err) {
@@ -139,7 +149,7 @@ export async function createProduct(companyId: string, input: CreateProductInput
 export async function updateProduct(companyId: string, id: string, input: UpdateProductInput) {
   const existing = await prisma.product.findFirst({
     where: { id, companyId },
-    select: { type: true, stock: true, lowStockAt: true },
+    select: { type: true, stock: true, lowStockAt: true, name: true, code: true, price: true, taxRate: true, category: true },
   });
   if (!existing) throw notFound("Product");
 
@@ -154,7 +164,19 @@ export async function updateProduct(companyId: string, id: string, input: Update
   if (input.category !== undefined) data.category = input.category;
 
   try {
-    const row = await prisma.product.update({ where: { id }, data, select: productSelect });
+    const row = await prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({ where: { id }, data, select: productSelect });
+      const fields = changedFields(existing as Record<string, unknown>, input as Record<string, unknown>);
+      if (fields.length > 0) {
+        await audit(tx, companyId, {
+          action: "update",
+          event: "productUpdated",
+          item: { type: "product", id, ref: updated.name },
+          values: { fields },
+        });
+      }
+      return updated;
+    });
     return toDto(row);
   } catch (err) {
     if (isUniqueViolation(err)) throw codeTaken(input.code ?? "");
@@ -164,8 +186,17 @@ export async function updateProduct(companyId: string, id: string, input: Update
 
 export async function deleteProduct(companyId: string, id: string) {
   // When invoices exist, deleting an item used on an invoice will be refused.
-  const { count } = await prisma.product.deleteMany({ where: { id, companyId } });
-  if (count === 0) throw notFound("Product");
+  await prisma.$transaction(async (tx) => {
+    const product = await tx.product.findFirst({ where: { id, companyId }, select: { name: true, code: true } });
+    const { count } = await tx.product.deleteMany({ where: { id, companyId } });
+    if (count === 0 || !product) throw notFound("Product");
+    await audit(tx, companyId, {
+      action: "delete",
+      event: "productDeleted",
+      item: { type: "product", ref: product.name },
+      values: { code: product.code },
+    });
+  });
 }
 
 /**
@@ -209,17 +240,26 @@ export async function importProducts(companyId: string, rows: unknown[]) {
   }
 
   try {
-    const { count } = await prisma.product.createMany({
-      data: valid.map((p) => ({
+    const { count } = await prisma.$transaction(async (tx) => {
+      const created = await tx.product.createMany({
+        data: valid.map((p) => ({
         name: p.name,
         type: p.type,
         code: p.code,
         price: p.price,
         taxRate: p.taxRate,
         category: p.category,
-        ...stockFor(p.type, p.stock, p.lowStockAt),
-        companyId,
-      })),
+          ...stockFor(p.type, p.stock, p.lowStockAt),
+          companyId,
+        })),
+      });
+      await audit(tx, companyId, {
+        action: "create",
+        event: "productsImported",
+        item: { type: "product" },
+        values: { count: created.count },
+      });
+      return created;
     });
     return { created: count };
   } catch (err) {

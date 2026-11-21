@@ -19,6 +19,8 @@ import { createSettingsRouter } from "./modules/settings/settings.routes.js";
 import { createTasksRouter } from "./modules/tasks/tasks.routes.js";
 import { createRecurringRouter } from "./modules/recurring/recurring.routes.js";
 import { createLedgerRouter } from "./modules/ledger/ledger.routes.js";
+import { createAuditRouter } from "./modules/audit/audit.routes.js";
+import { requestContext } from "./lib/request-context.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
@@ -40,6 +42,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   // 1mb fits a CSV import of 1000 customers; the default (100kb) does not.
   app.use(express.json({ limit: "1mb" }));
   app.use(pinoHttp({ logger }));
+  // The caller's IP (and, once signed in, who they are) for the audit log.
+  app.use(requestContext);
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
@@ -62,6 +66,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/tasks", createTasksRouter());
   app.use("/api/recurring", createRecurringRouter());
   app.use("/api/ledger", createLedgerRouter());
+  app.use("/api/audit", createAuditRouter());
   app.use("/api/quotes", createQuotesRouter());
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
 

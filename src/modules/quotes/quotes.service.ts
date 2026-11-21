@@ -15,6 +15,7 @@ import { Decimal, invoiceTotals, moneyString, ZERO, type LineInput } from "../..
 import { notFound } from "../../lib/params.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit } from "../audit/audit.service.js";
 import { VAT_RATE } from "../invoices/invoices.service.js";
 import type { CreateQuoteInput, ListQuotesQuery, QuoteListStatus, UpdateQuoteInput } from "./quotes.schemas.js";
 
@@ -442,7 +443,7 @@ type NewQuote = {
 };
 
 /** Writes a new quote with the company's next number; returns its id. */
-async function insertQuote(actor: Actor, input: NewQuote) {
+async function insertQuote(actor: Actor, input: NewQuote, event: "quoteCreated" | "quoteDuplicated") {
   const name = await actorName(actor.id);
   try {
     return await prisma.$transaction(async (tx) => {
@@ -480,7 +481,13 @@ async function insertQuote(actor: Actor, input: NewQuote) {
             ],
           },
         },
-        select: { id: true },
+        select: { id: true, number: true, numberPrefix: true },
+      });
+      await audit(tx, actor.companyId, {
+        action: "create",
+        event: input.send ? "quoteCreatedSent" : event,
+        item: { type: "quote", id: quote.id, ref: `${quote.numberPrefix}${quote.number}` },
+        values: { number: quote.number, amount: moneyString(totals.total), customer: input.customer.name },
       });
       return quote.id;
     });
@@ -504,7 +511,7 @@ export async function createQuote(actor: Actor, input: CreateQuoteInput) {
     items: input.items,
     notes: input.notes ?? null,
     send: input.send,
-  });
+  }, "quoteCreated");
   return getQuote(actor.companyId, { id });
 }
 
@@ -513,7 +520,7 @@ export async function createQuote(actor: Actor, input: CreateQuoteInput) {
  * are worked out again with the current VAT setting.
  */
 export async function updateQuote(actor: Actor, ref: QuoteRef, input: UpdateQuoteInput) {
-  const row = await findRow(prisma, actor.companyId, ref, { id: true, status: true });
+  const row = await findRow(prisma, actor.companyId, ref, { id: true, status: true, number: true, numberPrefix: true });
   if (row.status !== "draft") throw notDraft();
   const customer = await customerSnapshot(actor.companyId, input.customerId);
   await assertProducts(actor.companyId, input.items);
@@ -541,6 +548,12 @@ export async function updateQuote(actor: Actor, ref: QuoteRef, input: UpdateQuot
 
       await tx.quoteLine.deleteMany({ where: { quoteId: row.id } });
       await tx.quoteLine.createMany({ data: lines.map((line) => ({ ...line, quoteId: row.id })) });
+      await audit(tx, actor.companyId, {
+        action: "update",
+        event: "quoteUpdated",
+        item: { type: "quote", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+        values: { number: row.number, amount: moneyString(totals.total), customer: customer.name },
+      });
     });
   } catch (err) {
     rethrowWriteError(err);
@@ -581,7 +594,7 @@ export async function duplicateQuote(actor: Actor, ref: QuoteRef) {
     })),
     notes: original.notes,
     send: false,
-  });
+  }, "quoteDuplicated");
   return getQuote(actor.companyId, { id });
 }
 
@@ -599,7 +612,13 @@ async function missingOr(db: Tx, id: string, otherwise: AppError) {
 export async function sendQuote(actor: Actor, ref: QuoteRef) {
   const today = businessToday();
   await prisma.$transaction(async (tx) => {
-    const row = await findRow(tx, actor.companyId, ref, { id: true });
+    const row = await findRow(tx, actor.companyId, ref, {
+      id: true,
+      number: true,
+      numberPrefix: true,
+      total: true,
+      customerName: true,
+    });
     // Draft, not dated after today and still valid today, checked in the update itself,
     // so two clicks (or an edit at the same moment) can't get around it.
     const { count } = await tx.quote.updateMany({
@@ -621,6 +640,12 @@ export async function sendQuote(actor: Actor, ref: QuoteRef) {
       throw toIso(now.issueDate) > today ? futureIssueDate(409) : validityPassed(409);
     }
     await tx.quoteEvent.create({ data: { quoteId: row.id, type: "sent", userId: actor.id } });
+    await audit(tx, actor.companyId, {
+      action: "send",
+      event: "quoteSent",
+      item: { type: "quote", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: { number: row.number, amount: moneyString(row.total), customer: row.customerName },
+    });
   });
   return getQuote(actor.companyId, ref);
 }
@@ -633,7 +658,13 @@ type Decision = "accepted" | "rejected";
  */
 export async function decideQuote(actor: Actor, ref: QuoteRef, decision: Decision) {
   await prisma.$transaction(async (tx) => {
-    const row = await findRow(tx, actor.companyId, ref, { id: true });
+    const row = await findRow(tx, actor.companyId, ref, {
+      id: true,
+      number: true,
+      numberPrefix: true,
+      total: true,
+      customerName: true,
+    });
     const { count } = await tx.quote.updateMany({
       where: { id: row.id, status: "sent" },
       data: { status: decision, decidedAt: new Date(), decidedBy: "user" },
@@ -646,6 +677,12 @@ export async function decideQuote(actor: Actor, ref: QuoteRef, decision: Decisio
       );
     }
     await tx.quoteEvent.create({ data: { quoteId: row.id, type: decision, values: { by: "user" }, userId: actor.id } });
+    await audit(tx, actor.companyId, {
+      action: "update",
+      event: decision === "accepted" ? "quoteAccepted" : "quoteRejected",
+      item: { type: "quote", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: { number: row.number, amount: moneyString(row.total), customer: row.customerName },
+    });
   });
   return getQuote(actor.companyId, ref);
 }
@@ -656,7 +693,14 @@ export async function decideQuote(actor: Actor, ref: QuoteRef, decision: Decisio
  */
 export async function answerPublicQuote(token: string, decision: Decision) {
   const today = businessToday();
-  const row = await findPublicRow(token, { id: true });
+  const row = await findPublicRow(token, {
+    id: true,
+    companyId: true,
+    number: true,
+    numberPrefix: true,
+    total: true,
+    customerName: true,
+  });
   await prisma.$transaction(async (tx) => {
     const { count } = await tx.quote.updateMany({
       where: { id: row.id, status: "sent", validUntil: { gte: toDate(today) } },
@@ -670,6 +714,17 @@ export async function answerPublicQuote(token: string, decision: Decision) {
       );
     }
     await tx.quoteEvent.create({ data: { quoteId: row.id, type: decision, values: { by: "customer" } } });
+    await audit(
+      tx,
+      row.companyId,
+      {
+        action: "update",
+        event: decision === "accepted" ? "quoteAcceptedByCustomer" : "quoteRejectedByCustomer",
+        item: { type: "quote", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+        values: { number: row.number, amount: moneyString(row.total), customer: row.customerName, viaLink: true },
+      },
+      { id: null, name: row.customerName },
+    );
   });
   return getPublicQuote(token);
 }
@@ -683,13 +738,31 @@ export async function answerPublicQuote(token: string, decision: Decision) {
  * the owner only. A quote that became an invoice: never (the invoice points to it).
  */
 export async function deleteQuote(actor: Actor, ref: QuoteRef) {
-  const row = await findRow(prisma, actor.companyId, ref, { id: true });
+  const row = await findRow(prisma, actor.companyId, ref, {
+    id: true,
+    number: true,
+    numberPrefix: true,
+    status: true,
+    total: true,
+    customerName: true,
+  });
   const owner = can(actor.role, "deleteData");
 
   // One statement with every condition, so a quote sent or converted at the same
   // moment isn't deleted by someone who no longer may.
-  const { count } = await prisma.quote.deleteMany({
-    where: { id: row.id, companyId: actor.companyId, convertedInvoiceId: null, ...(owner ? {} : { status: "draft" }) },
+  const count = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.quote.deleteMany({
+      where: { id: row.id, companyId: actor.companyId, convertedInvoiceId: null, ...(owner ? {} : { status: "draft" }) },
+    });
+    if (count > 0) {
+      await audit(tx, actor.companyId, {
+        action: "delete",
+        event: "quoteDeleted",
+        item: { type: "quote", ref: `${row.numberPrefix}${row.number}` },
+        values: { amount: moneyString(row.total), customer: row.customerName, status: row.status },
+      });
+    }
+    return count;
   });
   if (count > 0) return;
 

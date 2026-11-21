@@ -6,6 +6,7 @@ import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { applyPayment, overdueWhere, paymentNumber } from "../invoices/invoices.service.js";
 import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
+import { audit } from "../audit/audit.service.js";
 import type { CreatePaymentInput, ListPaymentsQuery } from "./payments.schemas.js";
 
 type Actor = { id: string; companyId: string };
@@ -242,9 +243,28 @@ export async function createPayment(actor: Actor, input: CreatePaymentInput) {
 
 /** A pending cheque has cleared: from now on it counts as collected. */
 export async function clearPayment(actor: Actor, id: string) {
-  const { count } = await prisma.invoicePayment.updateMany({
-    where: { id, companyId: actor.companyId, status: "pending" },
-    data: { status: "cleared", clearedAt: new Date() },
+  const count = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.invoicePayment.updateMany({
+      where: { id, companyId: actor.companyId, status: "pending" },
+      data: { status: "cleared", clearedAt: new Date() },
+    });
+    if (count === 0) return 0;
+    const payment = await tx.invoicePayment.findUniqueOrThrow({
+      where: { id },
+      select: { number: true, amount: true, invoice: { select: { id: true, number: true, numberPrefix: true, customerName: true } } },
+    });
+    await audit(tx, actor.companyId, {
+      action: "payment",
+      event: "chequeCleared",
+      item: { type: "invoice", id: payment.invoice.id, ref: `${payment.invoice.numberPrefix}${payment.invoice.number}` },
+      values: {
+        number: payment.invoice.number,
+        amount: moneyString(payment.amount),
+        payment: paymentNumber(payment.number),
+        customer: payment.invoice.customerName,
+      },
+    });
+    return count;
   });
   if (count === 0) {
     await getPayment(actor.companyId, id); // 404 if it isn't ours
@@ -271,7 +291,7 @@ export async function removePayment(actor: Actor, id: string) {
         clearedAt: true,
         method: true,
         invoiceId: true,
-        invoice: { select: { customerId: true } },
+        invoice: { select: { customerId: true, number: true, numberPrefix: true, customerName: true } },
       },
     });
     if (!payment) throw notFound("Payment");
@@ -303,6 +323,18 @@ export async function removePayment(actor: Actor, id: string) {
     await tx.customer.update({
       where: { id: payment.invoice.customerId },
       data: { balance: { increment: payment.amount }, lastActivityAt: new Date() },
+    });
+    await audit(tx, actor.companyId, {
+      action: "payment",
+      event: "paymentRemoved",
+      item: { type: "invoice", id: payment.invoiceId, ref: `${payment.invoice.numberPrefix}${payment.invoice.number}` },
+      values: {
+        number: payment.invoice.number,
+        amount: moneyString(payment.amount),
+        payment: paymentNumber(payment.number),
+        method: payment.method,
+        customer: payment.invoice.customerName,
+      },
     });
   });
 }

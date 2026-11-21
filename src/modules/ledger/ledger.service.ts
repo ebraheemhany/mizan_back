@@ -9,6 +9,7 @@ import { debitNormal, getChart, idsByKey, type ChartAccount } from "./ledger.cha
 import { checkBooksOpen, lockBooks } from "./ledger.periods.js";
 import type { AccountInput, EntryInput, ListEntriesQuery, UpdateAccountInput } from "./ledger.schemas.js";
 import { autoLines, entryHeaders, type EntrySource } from "./ledger.sql.js";
+import { audit } from "../audit/audit.service.js";
 
 type Actor = { id: string; companyId: string };
 type Tx = Prisma.TransactionClient;
@@ -109,9 +110,18 @@ async function findCustomAccount(companyId: string, id: string) {
 export async function createAccount(companyId: string, input: AccountInput) {
   await getChart(companyId);
   try {
-    const row = await prisma.ledgerAccount.create({
-      data: { ...input, companyId },
-      select: { id: true, code: true, key: true, name: true, type: true },
+    const row = await prisma.$transaction(async (tx) => {
+      const created = await tx.ledgerAccount.create({
+        data: { ...input, companyId },
+        select: { id: true, code: true, key: true, name: true, type: true },
+      });
+      await audit(tx, companyId, {
+        action: "create",
+        event: "accountCreated",
+        item: { type: "ledgerAccount", id: created.id, ref: `${created.code} ${created.name}` },
+        values: { type: created.type },
+      });
+      return created;
     });
     return { ...accountRef(row), system: false, balance: "0.00", used: false };
   } catch (err) {
@@ -123,7 +133,16 @@ export async function createAccount(companyId: string, input: AccountInput) {
 export async function updateAccount(companyId: string, id: string, input: UpdateAccountInput) {
   await findCustomAccount(companyId, id);
   try {
-    await prisma.ledgerAccount.updateMany({ where: { id, companyId, key: null }, data: input });
+    await prisma.$transaction(async (tx) => {
+      const before = await tx.ledgerAccount.findUniqueOrThrow({ where: { id }, select: { code: true, name: true } });
+      await tx.ledgerAccount.updateMany({ where: { id, companyId, key: null }, data: input });
+      await audit(tx, companyId, {
+        action: "update",
+        event: "accountUpdated",
+        item: { type: "ledgerAccount", id, ref: `${input.code} ${input.name}` },
+        values: { from: `${before.code} ${before.name}` },
+      });
+    });
   } catch (err) {
     if (isPrismaError(err, "P2002")) throw codeUsed();
     throw err;
@@ -143,13 +162,18 @@ export async function updateAccount(companyId: string, id: string, input: Update
 export async function deleteAccount(companyId: string, id: string) {
   await findCustomAccount(companyId, id);
   await prisma.$transaction(async (tx) => {
-    const [row] = await tx.$queryRaw<{ id: string }[]>`
-      SELECT "id" FROM "ledger_accounts"
+    const [row] = await tx.$queryRaw<{ id: string; code: string; name: string | null }[]>`
+      SELECT "id", "code", "name" FROM "ledger_accounts"
       WHERE "id" = ${id} AND "companyId" = ${companyId} AND "key" IS NULL
       FOR UPDATE`;
     if (!row) throw notFound("Account");
     if (await tx.journalLine.count({ where: { accountId: id } })) throw accountInUse();
     await tx.ledgerAccount.delete({ where: { id } });
+    await audit(tx, companyId, {
+      action: "delete",
+      event: "accountDeleted",
+      item: { type: "ledgerAccount", ref: `${row.code} ${row.name ?? ""}`.trim() },
+    });
   });
 }
 
@@ -339,6 +363,8 @@ async function checkLines(companyId: string, lines: EntryInput["lines"]) {
   }
 }
 
+const entryTotal = (lines: EntryInput["lines"]) => lines.reduce((s, l) => s.plus(money(l.debit)), ZERO);
+
 const lineRows = (lines: EntryInput["lines"]) =>
   lines.map((l, position) => ({ position, accountId: l.accountId, debit: money(l.debit), credit: money(l.credit) }));
 
@@ -379,7 +405,13 @@ export async function createEntry(actor: Actor, input: EntryInput) {
         createdById: actor.id,
         lines: { create: lineRows(input.lines) },
       },
-      select: { id: true },
+      select: { id: true, number: true },
+    });
+    await audit(tx, actor.companyId, {
+      action: "create",
+      event: input.status === "draft" ? "entryDrafted" : "entryPosted",
+      item: { type: "entry", id: entry.id, ref: entryNumber(entry.number) },
+      values: { amount: moneyString(entryTotal(input.lines)), date: input.date, memo: input.memo },
     });
     return entry.id;
   }));
@@ -389,8 +421,8 @@ export async function createEntry(actor: Actor, input: EntryInput) {
 /** Locks the books (shared) and the entry (for update), then checks its date is open. */
 async function lockEntry(tx: Tx, companyId: string, id: string) {
   const closedThrough = await lockBooks(tx, companyId);
-  const [entry] = await tx.$queryRaw<{ date: Date; status: JournalStatus; postedAt: Date | null }[]>`
-    SELECT "date", "status", "postedAt" FROM "journal_entries"
+  const [entry] = await tx.$queryRaw<{ date: Date; status: JournalStatus; postedAt: Date | null; number: number; memo: string }[]>`
+    SELECT "date", "status", "postedAt", "number", "memo" FROM "journal_entries"
     WHERE "id" = ${id} AND "companyId" = ${companyId}
     FOR UPDATE`;
   if (!entry) throw entryNotFound();
@@ -404,6 +436,12 @@ export async function updateEntry(actor: Actor, id: string, input: EntryInput) {
     const entry = await lockEntry(tx, actor.companyId, id);
     checkBooksOpen(entry.closedThrough, [input.date]);
     await tx.journalLine.deleteMany({ where: { entryId: id } });
+    await audit(tx, actor.companyId, {
+      action: "update",
+      event: "entryUpdated",
+      item: { type: "entry", id, ref: entryNumber(entry.number) },
+      values: { amount: moneyString(entryTotal(input.lines)), date: input.date, memo: input.memo, posted: entry.status === "draft" && input.status === "posted" ? true : undefined },
+    });
     await tx.journalEntry.update({
       where: { id },
       data: {
@@ -423,6 +461,12 @@ export async function postEntry(actor: Actor, id: string) {
     const entry = await lockEntry(tx, actor.companyId, id);
     if (entry.status !== "draft") throw new AppError(409, "ENTRY_NOT_DRAFT", "This entry is already posted");
     await tx.journalEntry.update({ where: { id }, data: { status: "posted", postedAt: new Date() } });
+    await audit(tx, actor.companyId, {
+      action: "books",
+      event: "entryPostedLater",
+      item: { type: "entry", id, ref: entryNumber(entry.number) },
+      values: { memo: entry.memo },
+    });
   });
   return getEntry(actor.companyId, id);
 }
@@ -436,14 +480,23 @@ export async function postDrafts(actor: Actor, month: string) {
       where: { companyId: actor.companyId, status: "draft", date: { gte: toDate(start), lte: toDate(end) } },
       data: { status: "posted", postedAt: new Date() },
     });
+    if (count > 0) {
+      await audit(tx, actor.companyId, { action: "books", event: "draftsPosted", item: { type: "entry" }, values: { count, month } });
+    }
     return { posted: count };
   });
 }
 
 export async function deleteEntry(actor: Actor, id: string) {
   await prisma.$transaction(async (tx) => {
-    await lockEntry(tx, actor.companyId, id);
+    const entry = await lockEntry(tx, actor.companyId, id);
     await tx.journalEntry.delete({ where: { id } });
+    await audit(tx, actor.companyId, {
+      action: "delete",
+      event: "entryDeleted",
+      item: { type: "entry", ref: entryNumber(entry.number) },
+      values: { memo: entry.memo, date: toIso(entry.date), status: entry.status },
+    });
   });
 }
 

@@ -18,6 +18,8 @@ const PERMISSIONS = {
   ledger: ["owner", "accountant"],
   // Opening a closed month again changes what was final: the owner only.
   reopenPeriods: ["owner"],
+  // The audit log shows everyone's actions, sign-ins and IPs.
+  auditLog: ["owner"],
   // Adding, editing and completing tasks; every role can read them.
   tasks: ["owner", "accountant", "sales"],
   // Writing quotes (create, edit, send, accept/reject, duplicate, delete a draft);

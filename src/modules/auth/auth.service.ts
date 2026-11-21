@@ -5,6 +5,7 @@ import { prisma } from "../../lib/prisma.js";
 import type { ChangePasswordInput, LoginInput, RegisterInput } from "./auth.schemas.js";
 import { publicUserSelect, type PublicUser } from "../users/public-user.js";
 import { issueTokens, revokeAllSessions, type TokenUser } from "./tokens.js";
+import { audit } from "../audit/audit.service.js";
 
 
 const toTokenUser = (user: PublicUser): TokenUser => ({ id: user.id, companyId: user.company.id, role: user.role });
@@ -15,15 +16,24 @@ export async function register(input: RegisterInput) {
   let user: PublicUser;
   try {
     // Company and its owner are created together: if one fails, neither is saved.
-    user = await prisma.user.create({
-      data: {
-        email: input.email,
-        fullName: input.fullName,
-        passwordHash,
-        role: "owner",
-        company: { create: { name: input.companyName } },
-      },
-      select: publicUserSelect,
+    user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email: input.email,
+          fullName: input.fullName,
+          passwordHash,
+          role: "owner",
+          company: { create: { name: input.companyName } },
+        },
+        select: publicUserSelect,
+      });
+      await audit(
+        tx,
+        created.company.id,
+        { action: "create", event: "companyCreated", item: { type: "company", id: created.company.id, ref: created.company.name } },
+        { id: created.id, name: created.fullName },
+      );
+      return created;
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -46,13 +56,30 @@ export async function login(input: LoginInput) {
     ? await verifyPassword(found.passwordHash, input.password)
     : await verifyAgainstDummy(input.password);
 
+  // A wrong password for a real account goes in that company's log (someone may be
+  // guessing). An unknown email belongs to no company, so there is nowhere to log it.
+  if (found && !valid) {
+    await audit(
+      prisma,
+      found.company.id,
+      { action: "login", event: "signInFailed", item: { type: "account", ref: found.email } },
+      { id: found.id, name: found.fullName },
+    );
+  }
   // Same message for unknown email and wrong password.
   if (!found || !valid) {
     throw new AppError(401, "INVALID_CREDENTIALS", "Email or password is incorrect");
   }
 
   const { passwordHash: _passwordHash, ...user } = found;
-  return { ...(await issueTokens(toTokenUser(user), input.remember)), user };
+  const tokens = await issueTokens(toTokenUser(user), input.remember);
+  await audit(
+    prisma,
+    user.company.id,
+    { action: "login", event: "signedIn", item: { type: "account", ref: user.email } },
+    { id: user.id, name: user.fullName },
+  );
+  return { ...tokens, user };
 }
 
 export async function getCurrentUser(userId: string) {
@@ -84,6 +111,12 @@ export async function changePassword(userId: string, input: ChangePasswordInput)
       select: publicUserSelect,
     });
     await revokeAllSessions(userId, tx);
+    await audit(
+      tx,
+      user.company.id,
+      { action: "login", event: "passwordChanged", item: { type: "account", ref: user.email } },
+      { id: user.id, name: user.fullName },
+    );
     return issueTokens(toTokenUser(user), false, tx);
   });
 }

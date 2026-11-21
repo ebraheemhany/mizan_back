@@ -6,6 +6,7 @@ import { notFound } from "../../lib/params.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { assertBooksOpen, checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
+import { audit } from "../audit/audit.service.js";
 import { revenueByMonth } from "../reports/revenue.js";
 import type { CreateExpenseInput, ListExpensesQuery } from "./expenses.schemas.js";
 
@@ -188,7 +189,7 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
   const row = await prisma.$transaction(async (tx) => {
     // It goes into the books on its date, which must be open.
     await assertBooksOpen(tx, actor.companyId, [input.date]);
-    return tx.expense.create({
+    const created = await tx.expense.create({
       data: {
         title: input.title,
         category: input.category,
@@ -206,15 +207,33 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
       },
       select: expenseSelect,
     });
+    await audit(tx, actor.companyId, {
+      action: "create",
+      event: paid ? "expenseAdded" : "expenseAddedDue",
+      item: { type: "expense", id: created.id, ref: created.title },
+      values: { amount: moneyString(created.amount), category: created.category, vendor: created.vendor ?? undefined },
+    });
+    return created;
   });
   return toDto(row);
 }
 
 /** A due expense has been paid. */
 export async function payExpense(actor: Actor, id: string, paidFrom: ExpenseSource) {
-  const { count } = await prisma.expense.updateMany({
-    where: { id, companyId: actor.companyId, status: "due" },
-    data: { status: "paid", paidFrom, paidAt: new Date(), paidOn: toDate(businessToday()) },
+  const count = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.expense.updateMany({
+      where: { id, companyId: actor.companyId, status: "due" },
+      data: { status: "paid", paidFrom, paidAt: new Date(), paidOn: toDate(businessToday()) },
+    });
+    if (count === 0) return 0;
+    const expense = await tx.expense.findUniqueOrThrow({ where: { id }, select: { title: true, amount: true } });
+    await audit(tx, actor.companyId, {
+      action: "payment",
+      event: "expensePaid",
+      item: { type: "expense", id, ref: expense.title },
+      values: { amount: moneyString(expense.amount), paidFrom },
+    });
+    return count;
   });
   if (count === 0) {
     await getExpense(actor.companyId, id); // 404 if it isn't ours
@@ -238,7 +257,7 @@ export async function deleteExpense(actor: Actor, id: string) {
     const closedThrough = await lockBooks(tx, actor.companyId);
     const row = await tx.expense.findFirst({
       where: { id, companyId: actor.companyId },
-      select: { id: true, createdById: true, createdAt: true, date: true, paidOn: true },
+      select: { id: true, createdById: true, createdAt: true, date: true, paidOn: true, title: true, amount: true },
     });
     if (!row) throw notFound("Expense");
 
@@ -251,5 +270,11 @@ export async function deleteExpense(actor: Actor, id: string) {
     // deleteMany + count: a delete that lost a race with another one is a 404, not a 500.
     const { count } = await tx.expense.deleteMany({ where: { id: row.id, companyId: actor.companyId } });
     if (count === 0) throw notFound("Expense");
+    await audit(tx, actor.companyId, {
+      action: "delete",
+      event: "expenseDeleted",
+      item: { type: "expense", ref: row.title },
+      values: { amount: moneyString(row.amount) },
+    });
   });
 }

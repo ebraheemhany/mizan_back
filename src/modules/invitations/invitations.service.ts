@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { notFound } from "../../lib/params.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit } from "../audit/audit.service.js";
 import { publicUserSelect } from "../users/public-user.js";
 import type { AcceptInvitationInput, CreateInvitationInput } from "./invitations.schemas.js";
 
@@ -46,7 +47,7 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
       data: { revokedAt: new Date() },
     });
 
-    return tx.invitation.create({
+    const created = await tx.invitation.create({
       data: {
         email: input.email,
         name: input.name,
@@ -58,6 +59,13 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
       },
       select: invitationSelect,
     });
+    await audit(tx, inviter.companyId, {
+      action: "permissions",
+      event: "userInvited",
+      item: { type: "user", ref: input.name },
+      values: { role: input.role, email: input.email },
+    });
+    return created;
   });
 
   // The token is only ever returned here, inside the link. It cannot be read back later.
@@ -73,11 +81,20 @@ export function listPendingInvitations(companyId: string) {
 }
 
 export async function revokeInvitation(companyId: string, id: string) {
-  const { count } = await prisma.invitation.updateMany({
-    where: { id, companyId, acceptedAt: null, revokedAt: null },
-    data: { revokedAt: new Date() },
+  await prisma.$transaction(async (tx) => {
+    const invitation = await tx.invitation.findFirst({ where: { id, companyId }, select: { name: true, email: true, role: true } });
+    const { count } = await tx.invitation.updateMany({
+      where: { id, companyId, acceptedAt: null, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (count === 0 || !invitation) throw notFound("Invitation");
+    await audit(tx, companyId, {
+      action: "permissions",
+      event: "inviteRevoked",
+      item: { type: "user", ref: invitation.name },
+      values: { role: invitation.role, email: invitation.email },
+    });
   });
-  if (count === 0) throw notFound("Invitation");
 }
 
 /** What the invited person sees before accepting: who invited them, to which company, as what. */
@@ -111,7 +128,7 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
 
       const invitation = await tx.invitation.findUniqueOrThrow({ where: { id: found.id } });
 
-      return tx.user.create({
+      const user = await tx.user.create({
         data: {
           email: invitation.email,
           fullName: input.fullName ?? invitation.name,
@@ -121,6 +138,18 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
         },
         select: publicUserSelect,
       });
+      await audit(
+        tx,
+        invitation.companyId,
+        {
+          action: "permissions",
+          event: "memberJoined",
+          item: { type: "user", id: user.id, ref: user.fullName },
+          values: { role: user.role },
+        },
+        { id: user.id, name: user.fullName },
+      );
+      return user;
     });
   } catch (err) {
     // Someone registered with this email after the invite was sent. The transaction

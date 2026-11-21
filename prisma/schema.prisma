@@ -63,6 +63,7 @@ model Company {
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   ledgerAccounts LedgerAccount[]
+  auditEvents    AuditEvent[]
   journalEntries JournalEntry[]
   users          User[]
   invitations    Invitation[]
@@ -131,6 +132,7 @@ model User {
   quoteEvents       QuoteEvent[]
   createdRecurring  RecurringInvoice[]
   journalEntries    JournalEntry[]
+  auditEvents       AuditEvent[]
 
   @@index([companyId])
   @@map("users")
@@ -799,4 +801,52 @@ model JournalLine {
   @@index([entryId])
   @@index([accountId])
   @@map("journal_lines")
+}
+
+// ---------------------------------------------------------------------------
+// Audit log: who did what, when, from where
+// ---------------------------------------------------------------------------
+
+// The kind of change, for filtering. The exact event is AuditEvent.event.
+enum AuditAction {
+  create
+  update
+  delete
+  send
+  cancel
+  payment
+  permissions
+  login
+  settings
+  books
+}
+
+// Written in the same transaction as the change it records (so a change that
+// rolled back leaves no line). Nothing in the app edits or deletes these.
+model AuditEvent {
+  id        String      @id @default(uuid())
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  action    AuditAction
+  // What happened, e.g. invoiceIssued, paymentRemoved (the app's text: AuditLog.events.<event>).
+  event     String
+  // What it happened to: invoice, customer, expense, user... with its id and a
+  // readable reference (INV-1043, the customer's name) as it was at the time.
+  itemType  String
+  itemId    String?
+  itemRef   String?
+  // Details for the text: amount, name, role, changed fields...
+  values    Json        @default("{}")
+  ip        String?
+  // Who, as named at the time (kept if the user is removed later). No user = the
+  // system (a recurring invoice, ...) or a customer answering from a link.
+  userName  String?
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, userId])
+  @@map("audit_events")
 }

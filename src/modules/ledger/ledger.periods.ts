@@ -3,6 +3,7 @@ import { addMonths, businessToday, monthRange, toDate, toIso } from "../../lib/d
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { entryHeaders } from "./ledger.sql.js";
+import { audit } from "../audit/audit.service.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -149,6 +150,7 @@ export async function closePeriod(companyId: string, month: string) {
     if (drafts > 0) {
       throw new AppError(409, "PERIOD_HAS_DRAFTS", "Post or delete the draft entries in this period first", { drafts });
     }
+    await audit(tx, companyId, { action: "books", event: "periodClosed", item: { type: "period", ref: month }, values: { through } });
   });
   return getPeriods(companyId);
 }
@@ -164,10 +166,18 @@ export async function reopenPeriod(companyId: string) {
   const through = monthRange(current, -1).end;
 
   // Only from the state that was read (a close or reopen meanwhile wins).
-  const { count } = await prisma.company.updateMany({
-    where: { id: companyId, booksClosedThrough: toDate(current) },
-    data: { booksClosedThrough: toDate(through), booksClosedAt: null },
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.company.updateMany({
+      where: { id: companyId, booksClosedThrough: toDate(current) },
+      data: { booksClosedThrough: toDate(through), booksClosedAt: null },
+    });
+    if (count === 0) throw new AppError(409, "PERIOD_CHANGED", "The closed period changed meanwhile; reload and try again");
+    await audit(tx, companyId, {
+      action: "books",
+      event: "periodReopened",
+      item: { type: "period", ref: monthOf(current) },
+      values: { through },
+    });
   });
-  if (count === 0) throw new AppError(409, "PERIOD_CHANGED", "The closed period changed meanwhile; reload and try again");
   return getPeriods(companyId);
 }

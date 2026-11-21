@@ -3,6 +3,7 @@ import { unauthorized, forbidden } from "../lib/errors.js";
 import { verifyAccessToken } from "../lib/jwt.js";
 import { can, type Permission } from "../lib/permissions.js";
 import { prisma } from "../lib/prisma.js";
+import { setRequestUser } from "../lib/request-context.js";
 import type { Role } from "../generated/prisma/client.js";
 
 export const authenticate: RequestHandler = async (req, _res, next) => {
@@ -22,7 +23,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   // takes effect immediately instead of when the token expires.
   const user = await prisma.user.findUnique({
     where: { id: claims.sub },
-    select: { id: true, companyId: true, role: true, passwordChangedAt: true },
+    select: { id: true, companyId: true, role: true, passwordChangedAt: true, fullName: true },
   });
   if (!user) {
     throw unauthorized("Invalid or expired token");
@@ -32,6 +33,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   }
 
   req.user = { id: user.id, companyId: user.companyId, role: user.role };
+  setRequestUser({ id: user.id, name: user.fullName });
   next();
 };
 
