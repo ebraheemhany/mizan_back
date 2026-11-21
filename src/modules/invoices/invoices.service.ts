@@ -5,6 +5,7 @@ import { AppError } from "../../lib/errors.js";
 import { Decimal, invoiceTotals, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { markQuoteConverted } from "../quotes/quote-conversion.js";
 import type { CreateInvoiceInput, ListInvoicesQuery, RecordPaymentInput, ReminderInput } from "./invoices.schemas.js";
 
@@ -429,8 +430,10 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput, ori
       const company = await tx.company.update({
         where: { id: actor.companyId },
         data: { invoiceNextNumber: { increment: 1 } },
-        select: { invoiceNextNumber: true, invoicePrefix: true, vatEnabled: true },
+        select: { invoiceNextNumber: true, invoicePrefix: true, vatEnabled: true, booksClosedThrough: true },
       });
+      // An issued invoice goes into the books on its date, which must be open (a draft doesn't, yet).
+      if (input.send) checkBooksOpen(company.booksClosedThrough, [input.issueDate]);
       const vatRate = company.vatEnabled ? VAT_RATE : 0;
       const { amounts, subtotal, vat, total } = invoiceTotals(input.items, vatRate);
       const now = Date.now();
@@ -513,8 +516,10 @@ const futureIssueDate = (status: 400 | 409) =>
 /** Issues a draft: it gets its public link and starts counting in the customer's balance. */
 export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
   await prisma.$transaction(async (tx) => {
+    const closedThrough = await lockBooks(tx, actor.companyId);
     const row = await findRow(tx, actor.companyId, ref, { id: true, status: true, total: true, customerId: true, issueDate: true });
     if (row.status === "draft" && toIso(row.issueDate) > businessToday()) throw futureIssueDate(409);
+    if (row.status === "draft") checkBooksOpen(closedThrough, [toIso(row.issueDate)]);
     // The status condition makes this safe if two people press "send" at once.
     const { count } = await tx.invoice.updateMany({
       where: { id: row.id, status: "draft" },
@@ -548,6 +553,14 @@ export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordP
   const today = businessToday();
 
   return prisma.$transaction(async (tx) => {
+    // Receipt number, taken the same way as invoice numbers (the update locks the
+    // company row first: same lock order as everywhere else, and the closing date
+    // read here can't change before this payment is saved).
+    const company = await tx.company.update({
+      where: { id: actor.companyId },
+      data: { paymentNextNumber: { increment: 1 } },
+      select: { paymentNextNumber: true, booksClosedThrough: true },
+    });
     const row = await findRow(tx, actor.companyId, ref, {
       id: true,
       status: true,
@@ -563,6 +576,7 @@ export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordP
     if (input.date < toIso(row.issueDate)) {
       throw new AppError(400, "PAYMENT_BEFORE_ISSUE", "The payment date can't be before the invoice date", { field: "date" });
     }
+    checkBooksOpen(company.booksClosedThrough, [input.date]);
 
     // One statement adds the payment only if it fits in what is still owed.
     // Two payments recorded at the same moment can't together pay more than the total.
@@ -578,12 +592,6 @@ export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordP
       throw new AppError(400, "PAYMENT_EXCEEDS_BALANCE", "The payment is more than what is still owed", { field: "amount" });
     }
 
-    // Receipt number, taken the same way as invoice numbers (the update locks the row).
-    const company = await tx.company.update({
-      where: { id: actor.companyId },
-      data: { paymentNextNumber: { increment: 1 } },
-      select: { paymentNextNumber: true },
-    });
     // A cheque lowers what is owed straight away but only counts as collected once it clears.
     const pending = input.method === "cheque";
 
@@ -634,14 +642,17 @@ const notCancellable = () =>
  */
 export async function cancelInvoice(actor: Actor, ref: InvoiceRef) {
   await prisma.$transaction(async (tx) => {
+    const closedThrough = await lockBooks(tx, actor.companyId);
     const row = await findRow(tx, actor.companyId, ref, {
       id: true,
       status: true,
       total: true,
       amountPaid: true,
       customerId: true,
+      issueDate: true,
     });
     if ((row.status !== "draft" && row.status !== "sent") || !row.amountPaid.isZero()) throw notCancellable();
+    if (row.status === "sent") checkBooksOpen(closedThrough, [toIso(row.issueDate)]);
 
     // Same status and still nothing paid, checked in the update itself.
     const { count } = await tx.invoice.updateMany({

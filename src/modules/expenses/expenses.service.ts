@@ -5,6 +5,7 @@ import { Decimal, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
+import { assertBooksOpen, checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { revenueByMonth } from "../reports/revenue.js";
 import type { CreateExpenseInput, ListExpensesQuery } from "./expenses.schemas.js";
 
@@ -184,21 +185,27 @@ export async function dueExpenses(companyId: string) {
 
 export async function createExpense(actor: Actor, input: CreateExpenseInput) {
   const paid = input.status === "paid";
-  const row = await prisma.expense.create({
-    data: {
-      title: input.title,
-      category: input.category,
-      amount: money(input.amount),
-      date: toDate(input.date),
-      status: input.status,
-      paidFrom: paid ? (input.paidFrom ?? null) : null,
-      paidAt: paid ? new Date() : null,
-      dueDate: !paid && input.dueDate ? toDate(input.dueDate) : null,
-      vendor: input.vendor ?? null,
-      companyId: actor.companyId,
-      createdById: actor.id,
-    },
-    select: expenseSelect,
+  const row = await prisma.$transaction(async (tx) => {
+    // It goes into the books on its date, which must be open.
+    await assertBooksOpen(tx, actor.companyId, [input.date]);
+    return tx.expense.create({
+      data: {
+        title: input.title,
+        category: input.category,
+        amount: money(input.amount),
+        date: toDate(input.date),
+        status: input.status,
+        paidFrom: paid ? (input.paidFrom ?? null) : null,
+        paidAt: paid ? new Date() : null,
+        // Saved as paid: paid on its own date.
+        paidOn: paid ? toDate(input.date) : null,
+        dueDate: !paid && input.dueDate ? toDate(input.dueDate) : null,
+        vendor: input.vendor ?? null,
+        companyId: actor.companyId,
+        createdById: actor.id,
+      },
+      select: expenseSelect,
+    });
   });
   return toDto(row);
 }
@@ -207,7 +214,7 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
 export async function payExpense(actor: Actor, id: string, paidFrom: ExpenseSource) {
   const { count } = await prisma.expense.updateMany({
     where: { id, companyId: actor.companyId, status: "due" },
-    data: { status: "paid", paidFrom, paidAt: new Date() },
+    data: { status: "paid", paidFrom, paidAt: new Date(), paidOn: toDate(businessToday()) },
   });
   if (count === 0) {
     await getExpense(actor.companyId, id); // 404 if it isn't ours
@@ -227,17 +234,22 @@ async function getExpense(companyId: string, id: string) {
  * expense may also remove it within a short window (the "undo" after adding).
  */
 export async function deleteExpense(actor: Actor, id: string) {
-  const row = await prisma.expense.findFirst({
-    where: { id, companyId: actor.companyId },
-    select: { id: true, createdById: true, createdAt: true },
-  });
-  if (!row) throw notFound("Expense");
+  await prisma.$transaction(async (tx) => {
+    const closedThrough = await lockBooks(tx, actor.companyId);
+    const row = await tx.expense.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: { id: true, createdById: true, createdAt: true, date: true, paidOn: true },
+    });
+    if (!row) throw notFound("Expense");
 
-  const isOwnRecent = row.createdById === actor.id && Date.now() - row.createdAt.getTime() <= UNDO_WINDOW_MS;
-  if (!can(actor.role, "deleteData") && !isOwnRecent) {
-    throw new AppError(403, "FORBIDDEN", "Only the owner can delete an expense after it has been saved");
-  }
-  // deleteMany + count: a delete that lost a race with another one is a 404, not a 500.
-  const { count } = await prisma.expense.deleteMany({ where: { id: row.id, companyId: actor.companyId } });
-  if (count === 0) throw notFound("Expense");
+    const isOwnRecent = row.createdById === actor.id && Date.now() - row.createdAt.getTime() <= UNDO_WINDOW_MS;
+    if (!can(actor.role, "deleteData") && !isOwnRecent) {
+      throw new AppError(403, "FORBIDDEN", "Only the owner can delete an expense after it has been saved");
+    }
+    // Its entries leave the books on their dates, which must be open.
+    checkBooksOpen(closedThrough, [toIso(row.date), row.paidOn ? toIso(row.paidOn) : null]);
+    // deleteMany + count: a delete that lost a race with another one is a 404, not a 500.
+    const { count } = await tx.expense.deleteMany({ where: { id: row.id, companyId: actor.companyId } });
+    if (count === 0) throw notFound("Expense");
+  });
 }

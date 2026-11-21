@@ -51,19 +51,29 @@ model Company {
   notifications Json @default("{\"overdueInvoice\":true,\"newPayment\":true,\"taskReminder\":true,\"weeklyDigest\":false}")
   integrations  Json @default("{\"whatsapp\":false,\"paymentGateway\":false,\"eta\":false,\"calendar\":false}")
 
+  // --- Books ---
+  // Manual journal entries: JE-0001, JE-0002...
+  journalNextNumber  Int       @default(1)
+  // Everything dated on or before this day is closed: no entry may be added,
+  // changed or removed there (invoices, payments and expenses included).
+  booksClosedThrough DateTime? @db.Date
+  booksClosedAt      DateTime? @db.Timestamptz(3)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  users       User[]
-  invitations Invitation[]
-  customers   Customer[]
-  products    Product[]
-  invoices    Invoice[]
-  payments    InvoicePayment[]
-  expenses    Expense[]
-  tasks       Task[]
-  quotes      Quote[]
-  recurring   RecurringInvoice[]
+  ledgerAccounts LedgerAccount[]
+  journalEntries JournalEntry[]
+  users          User[]
+  invitations    Invitation[]
+  customers      Customer[]
+  products       Product[]
+  invoices       Invoice[]
+  payments       InvoicePayment[]
+  expenses       Expense[]
+  tasks          Task[]
+  quotes         Quote[]
+  recurring      RecurringInvoice[]
 
   @@map("companies")
 }
@@ -120,6 +130,7 @@ model User {
   createdQuotes     Quote[]
   quoteEvents       QuoteEvent[]
   createdRecurring  RecurringInvoice[]
+  journalEntries    JournalEntry[]
 
   @@index([companyId])
   @@map("users")
@@ -442,6 +453,9 @@ model Expense {
   // Where the money came from; set once it is paid.
   paidFrom ExpenseSource?
   paidAt   DateTime?       @db.Timestamptz(3)
+  // The business day it was paid: its own date when saved as paid, the day it was
+  // paid on when it was due first (the books move it out of "suppliers" then).
+  paidOn   DateTime?       @db.Date
   // When a due expense has to be paid.
   dueDate  DateTime?       @db.Date
   vendor   String?
@@ -699,4 +713,90 @@ model RecurringInvoiceLine {
 
   @@index([recurringId])
   @@map("recurring_invoice_lines")
+}
+
+// ---------------------------------------------------------------------------
+// Books: chart of accounts and manual journal entries
+//
+// Invoices, payments and expenses are not copied into the books: their entries
+// are worked out from the documents themselves whenever the books are read
+// (src/modules/ledger/ledger.sql.ts), so the two can never disagree. Only the
+// entries an accountant writes by hand are stored here.
+// ---------------------------------------------------------------------------
+
+enum AccountType {
+  asset
+  liability
+  equity
+  revenue
+  expense
+}
+
+enum JournalStatus {
+  draft
+  posted
+}
+
+// One company's chart of accounts. The built-in accounts (key set) are added on
+// first use and are where invoices, payments and expenses post; their names come
+// from the app's translations. Accounts the company adds itself have a name and
+// no key, and are used in manual entries.
+model LedgerAccount {
+  id        String      @id @default(uuid())
+  code      String
+  key       String?
+  name      String?
+  type      AccountType
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+
+  companyId String
+  company   Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lines     JournalLine[]
+
+  @@unique([companyId, code])
+  @@unique([companyId, key])
+  @@map("ledger_accounts")
+}
+
+model JournalEntry {
+  id        String        @id @default(uuid())
+  // Sequential per company, shown as JE-0001.
+  number    Int
+  date      DateTime      @db.Date
+  memo      String
+  // A draft doesn't count in any balance until it is posted.
+  status    JournalStatus
+  postedAt  DateTime?     @db.Timestamptz(3)
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @db.Timestamptz(3)
+
+  companyId   String
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines       JournalLine[]
+
+  @@unique([companyId, number])
+  @@index([companyId, date])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id       String  @id @default(uuid())
+  position Int
+  // One of the two is more than 0, the other is 0.
+  debit    Decimal @db.Decimal(14, 2)
+  credit   Decimal @db.Decimal(14, 2)
+
+  entryId   String
+  entry     JournalEntry  @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  // Cascade only so deleting a whole company works (NoAction failed there: the
+  // accounts can go before the lines pointing at them). An account used in an
+  // entry is never deleted: deleteAccount locks it and checks first.
+  accountId String
+  account   LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([entryId])
+  @@index([accountId])
+  @@map("journal_lines")
 }

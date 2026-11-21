@@ -5,6 +5,7 @@ import { moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { applyPayment, overdueWhere, paymentNumber } from "../invoices/invoices.service.js";
+import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import type { CreatePaymentInput, ListPaymentsQuery } from "./payments.schemas.js";
 
 type Actor = { id: string; companyId: string };
@@ -259,11 +260,25 @@ export async function clearPayment(actor: Actor, id: string) {
  */
 export async function removePayment(actor: Actor, id: string) {
   await prisma.$transaction(async (tx) => {
+    const closedThrough = await lockBooks(tx, actor.companyId);
     const payment = await tx.invoicePayment.findFirst({
       where: { id, companyId: actor.companyId },
-      select: { id: true, number: true, amount: true, invoiceId: true, invoice: { select: { customerId: true } } },
+      select: {
+        id: true,
+        number: true,
+        amount: true,
+        date: true,
+        clearedAt: true,
+        method: true,
+        invoiceId: true,
+        invoice: { select: { customerId: true } },
+      },
     });
     if (!payment) throw notFound("Payment");
+    checkBooksOpen(closedThrough, [
+      toIso(payment.date),
+      payment.method === "cheque" && payment.clearedAt ? businessToday(payment.clearedAt) : null,
+    ]);
 
     // Take the amount back off the invoice in one statement, recomputing its status.
     const updated = await tx.$executeRaw`

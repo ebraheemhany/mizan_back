@@ -450,6 +450,8 @@ async function invoiceAuthor(companyId: string, createdById: string | null) {
  */
 export async function runTemplate(id: string, today = businessToday()) {
   let made = 0;
+  // Set when a date had to be skipped; kept on the template after this run.
+  let note: string | null = null;
   for (let step = 0; step < MAX_PER_RUN; step++) {
     const t = await prisma.recurringInvoice.findUnique({
       where: { id },
@@ -501,13 +503,20 @@ export async function runTemplate(id: string, today = businessToday()) {
         );
         made++;
       } catch (err) {
-        // Another run made this one at the same moment: carry on. Anything else: note
-        // it on the template (the next run tries again) and stop for now.
+        // Another run made this one at the same moment: carry on. Its date is in a
+        // closed month (the books were closed before it was made): it can never be
+        // issued, so skip that date, note it, and go on to the next. Anything else:
+        // note it on the template (the next run tries again) and stop for now.
         if (!(await alreadyMade())) {
-          const message = err instanceof AppError ? err.code : "RECURRING_RUN_FAILED";
-          await prisma.recurringInvoice.update({ where: { id }, data: { lastError: message, lastRunAt: new Date() } });
-          logger.warn({ err, recurringId: id, runDate }, "Recurring invoice could not be made");
-          break;
+          if (err instanceof AppError && err.code === "PERIOD_CLOSED") {
+            note = "RECURRING_SKIPPED_CLOSED";
+            logger.warn({ recurringId: id, runDate }, "Recurring invoice skipped: its date is in a closed period");
+          } else {
+            const message = err instanceof AppError ? err.code : "RECURRING_RUN_FAILED";
+            await prisma.recurringInvoice.update({ where: { id }, data: { lastError: message, lastRunAt: new Date() } });
+            logger.warn({ err, recurringId: id, runDate }, "Recurring invoice could not be made");
+            break;
+          }
         }
       }
     }
@@ -538,7 +547,7 @@ export async function runTemplate(id: string, today = businessToday()) {
       data: {
         generatedCount,
         lastRunAt: new Date(),
-        lastError: null,
+        lastError: note,
         ...(state.ended
           ? { status: "ended", nextDate: null, nextIndex: t.nextIndex + 1 }
           : { nextIndex: state.nextIndex, nextDate: toDate(state.nextDate) }),

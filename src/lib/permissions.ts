@@ -14,6 +14,10 @@ const PERMISSIONS = {
   recordPayments: ["owner", "accountant"],
   expenses: ["owner", "accountant"],
   reports: ["owner", "accountant"],
+  // The books: chart of accounts, journal, trial balance, manual entries, closing months.
+  ledger: ["owner", "accountant"],
+  // Opening a closed month again changes what was final: the owner only.
+  reopenPeriods: ["owner"],
   // Adding, editing and completing tasks; every role can read them.
   tasks: ["owner", "accountant", "sales"],
   // Writing quotes (create, edit, send, accept/reject, duplicate, delete a draft);

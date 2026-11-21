@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { addDays, businessToday, toDate } from "../src/lib/dates.js";
+import { addDays, businessToday, monthRange, toDate } from "../src/lib/dates.js";
 import { runDueRecurring, scheduledDate } from "../src/modules/recurring/recurring.service.js";
 import { api, auth, ownerSession, prisma, resetDatabase, teamMember } from "./helpers.js";
 
@@ -336,6 +336,29 @@ describe("pause, resume, edit, delete", () => {
     expect(res.status).toBe(200);
     expect(res.body.template).toMatchObject({ generatedCount: 1, status: "active", nextDate: addDays(today(), 7) });
     expect(await prisma.invoice.count()).toBe(1);
+  });
+
+  it("a date in a month that has been closed in the books is skipped, not retried forever", async () => {
+    const owner = await ownerSession();
+    const customer = await customerOf(owner.token);
+    const template = await create(owner.token, customer.id);
+    const lastMonth = monthRange(today(), -1);
+    const missed = addDays(lastMonth.start, 9);
+    await backdate(template.id, { startDate: missed, nextIndex: 0, nextDate: missed });
+    const closed = await api()
+      .post("/api/ledger/periods/close")
+      .set(auth(owner.token))
+      .send({ month: lastMonth.start.slice(0, 7) });
+    expect(closed.status).toBe(200);
+
+    await runDueRecurring(today());
+    const row = await prisma.recurringInvoice.findUniqueOrThrow({ where: { id: template.id } });
+    expect(row.lastError).toBe("RECURRING_SKIPPED_CLOSED");
+    expect(row.nextDate!.toISOString().slice(0, 10) > missed).toBe(true);
+    expect(await prisma.invoice.count({ where: { recurringId: template.id, recurringRunDate: toDate(missed) } })).toBe(0);
+    // The next date (this month) was made if it has come.
+    const next = scheduledDate(missed, "monthly", 1);
+    expect(await prisma.invoice.count({ where: { recurringId: template.id } })).toBe(next <= today() ? 1 : 0);
   });
 
   it("deleting a template keeps the invoices it made", async () => {
