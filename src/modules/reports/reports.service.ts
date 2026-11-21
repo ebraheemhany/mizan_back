@@ -19,7 +19,7 @@ const within = (range: Range) => ({ gte: toDate(range.start), lte: toDate(range.
 // Period: "YYYY-MM", "thisQuarter" or "thisYear" (calendar), default this month
 // ---------------------------------------------------------------------------
 
-function resolvePeriod(key: string | undefined, today: string) {
+export function resolvePeriod(key: string | undefined, today: string) {
   const thisMonthEnd = monthRange(today).end;
   // "This quarter/year" so far: the months after this one haven't happened yet, so an
   // expense entered ahead of time (next month's rent) doesn't count before its month.

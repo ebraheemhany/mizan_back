@@ -4,6 +4,7 @@ import { authenticate, requirePermission } from "../../middleware/auth.js";
 import { parseQuery } from "../../middleware/validate.js";
 import { periodQuerySchema, statementQuerySchema } from "./reports.schemas.js";
 import * as reports from "./reports.service.js";
+import { balanceSheet, cashFlow } from "./statements.js";
 
 export function createReportsRouter() {
   const router = Router();
@@ -22,6 +23,17 @@ export function createReportsRouter() {
   router.get("/vat", async (req, res) => {
     const { period } = parseQuery(periodQuerySchema, req.query);
     res.json({ vat: await reports.vatReport(req.user!.companyId, period) });
+  });
+
+  // From the books (the ledger).
+  router.get("/balance-sheet", async (req, res) => {
+    const { period } = parseQuery(periodQuerySchema, req.query);
+    res.json({ balanceSheet: await balanceSheet(req.user!.companyId, period) });
+  });
+
+  router.get("/cash-flow", async (req, res) => {
+    const { period } = parseQuery(periodQuerySchema, req.query);
+    res.json({ cashFlow: await cashFlow(req.user!.companyId, period) });
   });
 
   router.get("/statement", async (req, res) => {
