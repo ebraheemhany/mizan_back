@@ -35,6 +35,7 @@ const dealSelect = {
   customer: { select: { name: true } },
   ownerId: true,
   owner: { select: { fullName: true } },
+  _count: { select: { tasks: { where: { completedOn: null } } } },
 } satisfies Prisma.DealSelect;
 
 type DealRow = Prisma.DealGetPayload<{ select: typeof dealSelect }>;
@@ -57,6 +58,8 @@ function toDto(row: DealRow, today: string) {
     awaitingReply: row.awaitingReply,
     followUpDate: row.followUpDate ? toIso(row.followUpDate) : null,
     wonAt: row.wonAt?.toISOString() ?? null,
+    // Tasks about it that are still open.
+    openTasks: row._count.tasks,
     lost: row.lostOn ? { reason: row.lostReason, note: row.lostNote, date: toIso(row.lostOn) } : null,
     createdAt: row.createdAt.toISOString(),
   };

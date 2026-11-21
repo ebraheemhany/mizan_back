@@ -12,6 +12,8 @@ const taskFields = {
   kind: z.enum(taskKinds),
   /** A customer of the same company; null for none. */
   customerId: z.uuid().nullable(),
+  /** A deal of the same company; null for none. Its customer fills in a missing customer. */
+  dealId: z.uuid().nullable(),
 };
 
 export const createTaskSchema = z.object({
@@ -20,6 +22,7 @@ export const createTaskSchema = z.object({
   priority: taskFields.priority.default("normal"),
   kind: taskFields.kind.default("admin"),
   customerId: taskFields.customerId.optional(),
+  dealId: taskFields.dealId.optional(),
 });
 
 export const updateTaskSchema = z

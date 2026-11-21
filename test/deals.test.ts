@@ -205,6 +205,33 @@ describe("who can do what", () => {
     expect(fresh.id).not.toBe(quiet.id);
   });
 
+  it("tasks about a deal: its customer fills in, the deal counts open ones, the task outlives the deal", async () => {
+    const { token } = await ownerSession();
+    const other = await ownerSession();
+    const customer = await customerOf(token);
+    const deal = await create(token, customer.id);
+    const theirDeal = await create(other.token, (await customerOf(other.token)).id);
+    const task = (body: Record<string, unknown>) =>
+      api().post("/api/tasks").set(auth(token)).send({ title: "اتصال متابعة", due: today(), ...body });
+
+    const linked = (await ok(await task({ dealId: deal.id }), 201)).task;
+    expect(linked).toMatchObject({ deal: { id: deal.id, title: "عقد صيانة سنوي" }, customer: { id: customer.id } });
+    expect((await task({ dealId: theirDeal.id })).body.error.code).toBe("INVALID_DEAL");
+    const done = (await ok(await task({ dealId: deal.id, title: "زيارة" }), 201)).task;
+    await ok(await api().patch(`/api/tasks/${done.id}`).set(auth(token)).send({ done: true }));
+
+    expect((await list(token))[0]).toMatchObject({ id: deal.id, openTasks: 1 });
+
+    // Unlink, then link again from the task.
+    const unlinked = (await ok(await api().patch(`/api/tasks/${linked.id}`).set(auth(token)).send({ dealId: null }))).task;
+    expect(unlinked.deal).toBeNull();
+    await ok(await api().patch(`/api/tasks/${linked.id}`).set(auth(token)).send({ dealId: deal.id }));
+
+    expect((await api().delete(`/api/deals/${deal.id}`).set(auth(token))).status).toBe(204);
+    const { items } = await ok(await api().get("/api/tasks").set(auth(token)));
+    expect(items.find((t: { id: string }) => t.id === linked.id)).toMatchObject({ deal: null, customer: { id: customer.id } });
+  });
+
   it("everything goes in the audit log", async () => {
     const { token } = await ownerSession();
     const customer = await customerOf(token);

@@ -52,6 +52,7 @@ describe("POST /api/tasks", () => {
       done: false,
       completedOn: null,
       customer: null,
+      deal: null,
       createdBy: { id: owner.userId, fullName: "محمد أحمد" },
       createdAt: expect.any(String),
     });

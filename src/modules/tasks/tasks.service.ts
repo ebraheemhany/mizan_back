@@ -24,6 +24,7 @@ const taskSelect = {
   createdAt: true,
   // The live customer, so a renamed customer shows its new name.
   customer: { select: { id: true, name: true } },
+  deal: { select: { id: true, title: true } },
   createdBy: { select: { id: true, fullName: true } },
 } satisfies Prisma.TaskSelect;
 
@@ -39,6 +40,7 @@ function toDto(row: TaskRow) {
     done: row.completedOn !== null,
     completedOn: row.completedOn ? toIso(row.completedOn) : null,
     customer: row.customer,
+    deal: row.deal,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
   };
@@ -93,6 +95,16 @@ async function assertCustomer(companyId: string, customerId: string | null | und
   if (found === 0) throw invalidCustomer();
 }
 
+const invalidDeal = () => new AppError(400, "INVALID_DEAL", "Choose a deal of this company", { field: "dealId" });
+
+/** A linked deal must belong to the same company; returns its customer (to fill in a missing one). */
+async function assertDeal(companyId: string, dealId: string | null | undefined) {
+  if (!dealId) return null;
+  const deal = await prisma.deal.findFirst({ where: { id: dealId, companyId }, select: { customerId: true } });
+  if (!deal) throw invalidDeal();
+  return deal;
+}
+
 /**
  * The database refused the customer link: the customer was deleted between the check
  * above and the write. Same answer as if it had never been there.
@@ -103,6 +115,7 @@ const rethrowCustomerGone = (err: unknown): never => {
 
 export async function createTask(actor: Actor, input: CreateTaskInput) {
   await assertCustomer(actor.companyId, input.customerId);
+  const deal = await assertDeal(actor.companyId, input.dealId);
   const row = await prisma.task
     .create({
       data: {
@@ -110,7 +123,9 @@ export async function createTask(actor: Actor, input: CreateTaskInput) {
         dueDate: toDate(input.due),
         priority: input.priority,
         kind: input.kind,
-        customerId: input.customerId ?? null,
+        // A task about a deal is about its customer too, unless another one was chosen.
+        customerId: input.customerId ?? deal?.customerId ?? null,
+        dealId: input.dealId ?? null,
         companyId: actor.companyId,
         createdById: actor.id,
       },
@@ -144,6 +159,7 @@ export async function updateTask(actor: Actor, id: string, input: UpdateTaskInpu
   });
   if (!existing) throw notFound("Task");
   await assertCustomer(actor.companyId, input.customerId);
+  const deal = await assertDeal(actor.companyId, input.dealId);
 
   const data = {
     ...withoutUndefined({
@@ -151,7 +167,9 @@ export async function updateTask(actor: Actor, id: string, input: UpdateTaskInpu
       dueDate: input.due === undefined ? undefined : toDate(input.due),
       priority: input.priority,
       kind: input.kind,
-      customerId: input.customerId,
+      // Linking a deal without naming a customer: the deal's customer.
+      customerId: input.customerId === undefined && deal ? deal.customerId : input.customerId,
+      dealId: input.dealId,
     }),
     ...completion(input.done, existing.completedOn !== null, input.completedOn),
   } satisfies Prisma.TaskUncheckedUpdateManyInput;

@@ -517,10 +517,14 @@ model Task {
   // Optional link to a customer; the task stays if the customer is deleted.
   customerId  String?
   customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  // Optional link to a deal (a call, a meeting about it); the task stays if the deal is deleted.
+  dealId      String?
+  deal        Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([companyId, dueDate])
+  @@index([dealId])
   @@index([companyId, completedOn])
   @@index([customerId])
   @@map("tasks")
@@ -914,6 +918,7 @@ model Deal {
   owner       User?    @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   createdById String?
   createdBy   User?    @relation("DealCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  tasks       Task[]
 
   @@index([companyId, stage])
   @@index([customerId])
