@@ -25,6 +25,9 @@ const PERMISSIONS = {
   // Writing quotes (create, edit, send, accept/reject, duplicate, delete a draft);
   // every role can read them. Converting one needs issueInvoices (it makes an invoice).
   quotes: ["owner", "accountant", "sales"],
+  // Working on the sales pipeline (add, edit, move, lose, reopen, delete); every role
+  // can see it. Deleting a won deal needs deleteData.
+  deals: ["owner", "accountant", "sales"],
   settings: ["owner"],
   deleteData: ["owner"],
 } as const satisfies Record<string, readonly Role[]>;

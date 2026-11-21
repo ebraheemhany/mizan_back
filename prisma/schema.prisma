@@ -64,6 +64,7 @@ model Company {
 
   ledgerAccounts LedgerAccount[]
   auditEvents    AuditEvent[]
+  deals          Deal[]
   journalEntries JournalEntry[]
   users          User[]
   invitations    Invitation[]
@@ -133,6 +134,8 @@ model User {
   createdRecurring  RecurringInvoice[]
   journalEntries    JournalEntry[]
   auditEvents       AuditEvent[]
+  ownedDeals        Deal[]             @relation("DealOwner")
+  createdDeals      Deal[]             @relation("DealCreator")
 
   @@index([companyId])
   @@map("users")
@@ -168,6 +171,7 @@ model Customer {
   tasks     Task[]
   quotes    Quote[]
   recurring RecurringInvoice[]
+  deals     Deal[]
 
   @@index([companyId, lastActivityAt])
   @@index([companyId, name])
@@ -849,4 +853,65 @@ model AuditEvent {
   @@index([companyId, createdAt])
   @@index([companyId, userId])
   @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------------
+// Deals (the sales pipeline)
+// ---------------------------------------------------------------------------
+
+enum DealStage {
+  lead
+  contacted
+  proposal
+  negotiation
+  won
+}
+
+enum DealLossReason {
+  price
+  competitor
+  postponed
+  noResponse
+  noNeed
+  other
+}
+
+model Deal {
+  id             String          @id @default(uuid())
+  title          String
+  value          Decimal         @db.Decimal(14, 2)
+  // A lost deal keeps the stage it was lost at (for the funnel and reopening).
+  stage          DealStage
+  // When it is expected to close; for a won deal, the day it was won.
+  closeDate      DateTime        @db.Date
+  notes          String?
+  // Last time someone worked on it (moved it, edited it, logged a follow-up):
+  // a deal left alone for days is flagged on the board.
+  lastActivityAt DateTime        @default(now()) @db.Timestamptz(3)
+  // Waiting for the customer to answer; cleared by the next activity.
+  awaitingReply  Boolean         @default(false)
+  // A day to follow up on it (shown on the card that day).
+  followUpDate   DateTime?       @db.Date
+  wonAt          DateTime?       @db.Timestamptz(3)
+  // Lost: set together (the day, why, and an optional note).
+  lostOn         DateTime?       @db.Date
+  lostReason     DealLossReason?
+  lostNote       String?
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
+
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // A customer's deals go with the customer.
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  // The team member responsible (none = nobody yet).
+  ownerId     String?
+  owner       User?    @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?    @relation("DealCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, stage])
+  @@index([customerId])
+  @@map("deals")
 }

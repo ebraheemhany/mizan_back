@@ -20,6 +20,7 @@ import { createTasksRouter } from "./modules/tasks/tasks.routes.js";
 import { createRecurringRouter } from "./modules/recurring/recurring.routes.js";
 import { createLedgerRouter } from "./modules/ledger/ledger.routes.js";
 import { createAuditRouter } from "./modules/audit/audit.routes.js";
+import { createDealsRouter } from "./modules/deals/deals.routes.js";
 import { requestContext } from "./lib/request-context.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
@@ -67,6 +68,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/recurring", createRecurringRouter());
   app.use("/api/ledger", createLedgerRouter());
   app.use("/api/audit", createAuditRouter());
+  app.use("/api/deals", createDealsRouter());
   app.use("/api/quotes", createQuotesRouter());
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
 
