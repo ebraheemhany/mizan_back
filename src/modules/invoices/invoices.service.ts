@@ -138,6 +138,7 @@ const detailSelect = {
       currency: true,
       invoiceTemplate: true,
       invoiceFooter: true,
+      logoFileId: true,
     },
   },
   recurring: { select: { id: true, name: true } },
@@ -158,6 +159,7 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
       commercialRegister: row.company.commercialRegister,
       location: row.company.address,
       phone: row.company.phone,
+      logoId: row.company.logoFileId,
     },
     client: {
       name: row.customerName,

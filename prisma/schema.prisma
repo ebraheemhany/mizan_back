@@ -59,12 +59,17 @@ model Company {
   booksClosedThrough DateTime? @db.Date
   booksClosedAt      DateTime? @db.Timestamptz(3)
 
+  // The logo printed on invoices and quotes (an uploaded file).
+  logoFileId String?     @unique
+  logo       StoredFile? @relation("CompanyLogo", fields: [logoFileId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   ledgerAccounts LedgerAccount[]
   auditEvents    AuditEvent[]
   deals          Deal[]
+  files          StoredFile[]       @relation("CompanyFiles")
   journalEntries JournalEntry[]
   users          User[]
   invitations    Invitation[]
@@ -135,6 +140,7 @@ model User {
   journalEntries    JournalEntry[]
   auditEvents       AuditEvent[]
   ownedDeals        Deal[]             @relation("DealOwner")
+  uploadedFiles     StoredFile[]
   createdDeals      Deal[]             @relation("DealCreator")
 
   @@index([companyId])
@@ -453,22 +459,25 @@ enum ExpenseSource {
 }
 
 model Expense {
-  id       String          @id @default(uuid())
-  title    String
-  category ExpenseCategory
-  amount   Decimal         @db.Decimal(14, 2)
+  id            String          @id @default(uuid())
+  title         String
+  category      ExpenseCategory
+  amount        Decimal         @db.Decimal(14, 2)
   // The day the expense belongs to (it counts in this day's month).
-  date     DateTime        @db.Date
-  status   ExpenseStatus
+  date          DateTime        @db.Date
+  status        ExpenseStatus
   // Where the money came from; set once it is paid.
-  paidFrom ExpenseSource?
-  paidAt   DateTime?       @db.Timestamptz(3)
+  paidFrom      ExpenseSource?
+  paidAt        DateTime?       @db.Timestamptz(3)
   // The business day it was paid: its own date when saved as paid, the day it was
   // paid on when it was due first (the books move it out of "suppliers" then).
-  paidOn   DateTime?       @db.Date
+  paidOn        DateTime?       @db.Date
+  // A photo or PDF of the receipt (an uploaded file).
+  receiptFileId String?         @unique
+  receipt       StoredFile?     @relation(fields: [receiptFileId], references: [id], onDelete: SetNull)
   // When a due expense has to be paid.
-  dueDate  DateTime?       @db.Date
-  vendor   String?
+  dueDate       DateTime?       @db.Date
+  vendor        String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -923,4 +932,40 @@ model Deal {
   @@index([companyId, stage])
   @@index([customerId])
   @@map("deals")
+}
+
+// ---------------------------------------------------------------------------
+// Uploaded files (the company logo, expense receipts)
+//
+// Kept in the database so the app runs on any host without a separate file
+// store; files are small (logo ≤ 1 MB, receipt ≤ 5 MB). The type is checked
+// from the file's first bytes, not from what the browser said.
+// ---------------------------------------------------------------------------
+
+enum FileKind {
+  logo
+  receipt
+}
+
+model StoredFile {
+  id          String   @id @default(uuid())
+  kind        FileKind
+  // image/png, image/jpeg, image/webp, or application/pdf (receipts).
+  contentType String
+  size        Int
+  // The name it had on the uploader's device (for downloads).
+  name        String?
+  data        Bytes
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  companyId   String
+  company     Company @relation("CompanyFiles", fields: [companyId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  logoOf    Company? @relation("CompanyLogo")
+  receiptOf Expense?
+
+  @@index([companyId])
+  @@map("files")
 }

@@ -23,6 +23,7 @@ const settingsSelect = {
   invoiceFooter: true,
   notifications: true,
   integrations: true,
+  logoFileId: true,
 } satisfies Prisma.CompanySelect;
 
 type SettingsRow = Prisma.CompanyGetPayload<{ select: typeof settingsSelect }>;
@@ -36,6 +37,8 @@ function toDto(row: SettingsRow) {
       commercialRegister: row.commercialRegister,
       phone: row.phone,
       address: row.address,
+      // Shown from /api/public/logos/<logoId>; null when there is none.
+      logoId: row.logoFileId,
     },
     taxes: {
       vatEnabled: row.vatEnabled,

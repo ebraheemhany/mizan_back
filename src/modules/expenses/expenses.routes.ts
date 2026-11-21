@@ -4,6 +4,8 @@ import { authenticate, requirePermission } from "../../middleware/auth.js";
 import { parseQuery, validateBody } from "../../middleware/validate.js";
 import { createExpenseSchema, listExpensesQuerySchema, payExpenseSchema } from "./expenses.schemas.js";
 import * as expenses from "./expenses.service.js";
+import { rawUpload, sendFile } from "../files/files.routes.js";
+import { attachReceipt, fileName, getReceipt, removeReceipt } from "../files/files.service.js";
 
 export function createExpensesRouter() {
   const router = Router();
@@ -35,6 +37,19 @@ export function createExpensesRouter() {
   router.post("/:id/pay", validateBody(payExpenseSchema), async (req, res) => {
     const id = parseId(req.params.id, "Expense");
     res.json({ expense: await expenses.payExpense(req.user!, id, req.body.paidFrom) });
+  });
+
+  // The receipt: the file is the request body (image or PDF, up to 5 MB).
+  router.put("/:id/receipt", rawUpload, async (req, res) => {
+    const id = parseId(req.params.id, "Expense");
+    res.json(await attachReceipt(req.user!, id, req.body, fileName(req.headers["x-file-name"])));
+  });
+  router.get("/:id/receipt", async (req, res) => {
+    sendFile(res, await getReceipt(req.user!.companyId, parseId(req.params.id, "Expense")));
+  });
+  router.delete("/:id/receipt", async (req, res) => {
+    await removeReceipt(req.user!, parseId(req.params.id, "Expense"));
+    res.status(204).end();
   });
 
   router.delete("/:id", async (req, res) => {

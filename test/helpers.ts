@@ -20,7 +20,7 @@ export const decodeJwt = (token: string) =>
   JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) as { iat: number; exp: number; sub: string };
 
 export async function resetDatabase() {
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "deals", "audit_events", "journal_lines", "journal_entries", "ledger_accounts", "recurring_invoice_lines", "recurring_invoices", "expenses", "quote_events", "quote_lines", "quotes", "invoice_payments", "invoices", "products", "tasks", "customers", "invitations", "refresh_tokens", "users", "companies" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "files", "deals", "audit_events", "journal_lines", "journal_entries", "ledger_accounts", "recurring_invoice_lines", "recurring_invoices", "expenses", "quote_events", "quote_lines", "quotes", "invoice_payments", "invoices", "products", "tasks", "customers", "invitations", "refresh_tokens", "users", "companies" CASCADE`);
 }
 
 export async function registerUser(email = uniqueEmail(), password = PASSWORD) {

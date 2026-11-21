@@ -19,6 +19,12 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     return;
   }
 
+  // A body over the route's limit (a CSV import or an uploaded file too big).
+  if (err?.type === "entity.too.large") {
+    res.status(413).json({ error: { code: "FILE_TOO_LARGE", message: "The file or request is too large" } });
+    return;
+  }
+
   req.log.error({ err }, "Unhandled error");
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Something went wrong" } });
 };

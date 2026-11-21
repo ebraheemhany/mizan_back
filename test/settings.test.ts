@@ -19,6 +19,9 @@ const fullSettings = {
   integrations: { whatsapp: true, paymentGateway: false, eta: false, calendar: true },
 };
 
+/** What comes back: the same, plus the logo (uploaded separately; none here). */
+const savedSettings = { ...fullSettings, company: { ...fullSettings.company, logoId: null } };
+
 const get = (token: string) => api().get("/api/settings").set(auth(token));
 const patch = (token: string, body: unknown) => api().patch("/api/settings").set(auth(token)).send(body);
 
@@ -28,7 +31,7 @@ describe("GET /api/settings", () => {
     const res = await get(owner.token);
     expect(res.status).toBe(200);
     expect(res.body.settings).toEqual({
-      company: { name: "شركة ميزان", taxNumber: null, commercialRegister: null, phone: null, address: null },
+      company: { name: "شركة ميزان", taxNumber: null, commercialRegister: null, phone: null, address: null, logoId: null },
       taxes: { vatEnabled: true, withholdingEnabled: false, currency: "EGP", fiscalStartMonth: 1 },
       numbering: { invoicePrefix: "INV-", invoiceNext: 1, quotePrefix: "Q-", quoteNext: 1, paymentTermsDays: 30 },
       template: { style: "classic", footer: null },
@@ -52,8 +55,8 @@ describe("PATCH /api/settings", () => {
     const owner = await ownerSession();
     const res = await patch(owner.token, fullSettings);
     expect(res.status).toBe(200);
-    expect(res.body.settings).toEqual(fullSettings);
-    expect((await get(owner.token)).body.settings).toEqual(fullSettings);
+    expect(res.body.settings).toEqual(savedSettings);
+    expect((await get(owner.token)).body.settings).toEqual(savedSettings);
   });
 
   it("saves only the sections sent", async () => {
@@ -62,7 +65,7 @@ describe("PATCH /api/settings", () => {
     const res = await patch(owner.token, { taxes: { ...fullSettings.taxes, currency: "SAR" } });
     expect(res.body.settings.taxes.currency).toBe("SAR");
     expect(res.body.settings.numbering).toEqual(fullSettings.numbering);
-    expect(res.body.settings.company).toEqual(fullSettings.company);
+    expect(res.body.settings.company).toEqual(savedSettings.company);
   });
 
   it("empty optional fields are cleared", async () => {

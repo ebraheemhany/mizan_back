@@ -28,6 +28,7 @@ const expenseSelect = {
   vendor: true,
   createdAt: true,
   createdById: true,
+  receipt: { select: { contentType: true, size: true, name: true } },
 } satisfies Prisma.ExpenseSelect;
 
 type ExpenseRow = Prisma.ExpenseGetPayload<{ select: typeof expenseSelect }>;
@@ -45,6 +46,8 @@ function toDto(row: ExpenseRow) {
     dueDate: row.dueDate ? toIso(row.dueDate) : null,
     vendor: row.vendor,
     createdAt: row.createdAt,
+    // The attached receipt (GET /api/expenses/:id/receipt); null when there is none.
+    receipt: row.receipt,
   };
 }
 
@@ -257,7 +260,7 @@ export async function deleteExpense(actor: Actor, id: string) {
     const closedThrough = await lockBooks(tx, actor.companyId);
     const row = await tx.expense.findFirst({
       where: { id, companyId: actor.companyId },
-      select: { id: true, createdById: true, createdAt: true, date: true, paidOn: true, title: true, amount: true },
+      select: { id: true, createdById: true, createdAt: true, date: true, paidOn: true, title: true, amount: true, receiptFileId: true },
     });
     if (!row) throw notFound("Expense");
 
@@ -270,6 +273,7 @@ export async function deleteExpense(actor: Actor, id: string) {
     // deleteMany + count: a delete that lost a race with another one is a 404, not a 500.
     const { count } = await tx.expense.deleteMany({ where: { id: row.id, companyId: actor.companyId } });
     if (count === 0) throw notFound("Expense");
+    if (row.receiptFileId) await tx.storedFile.deleteMany({ where: { id: row.receiptFileId, companyId: actor.companyId } });
     await audit(tx, actor.companyId, {
       action: "delete",
       event: "expenseDeleted",

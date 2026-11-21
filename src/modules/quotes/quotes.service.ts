@@ -119,7 +119,15 @@ const detailSelect = {
     select: { id: true, type: true, values: true, createdAt: true },
   },
   company: {
-    select: { name: true, taxNumber: true, commercialRegister: true, address: true, phone: true, currency: true },
+    select: {
+      name: true,
+      taxNumber: true,
+      commercialRegister: true,
+      address: true,
+      phone: true,
+      currency: true,
+      logoFileId: true,
+    },
   },
 } satisfies Prisma.QuoteSelect;
 
@@ -135,6 +143,7 @@ function toDetailDto(row: DetailRow, today: string) {
       commercialRegister: row.company.commercialRegister,
       location: row.company.address,
       phone: row.company.phone,
+      logoId: row.company.logoFileId,
     },
     client: {
       name: row.customerName,
