@@ -297,13 +297,17 @@ export async function statement(companyId: string, customerId: string, periodKey
       prisma.customer.findFirst({ where: { id: customerId, companyId }, select: { id: true, name: true } }),
       prisma.invoice.aggregate({ where: { ...issued, issueDate: before }, _sum: { total: true } }),
       // A payment is never dated before its invoice, so these are the payments on the invoices above.
-      prisma.invoicePayment.aggregate({ where: { companyId, date: before, invoice: issued }, _sum: { amount: true } }),
+      prisma.invoicePayment.aggregate({
+        where: { companyId, date: before, invoice: issued, status: { not: "bounced" } },
+        _sum: { amount: true },
+      }),
       prisma.invoice.findMany({
         where: { ...issued, issueDate: within(counted(period)) },
         select: { id: true, number: true, numberPrefix: true, issueDate: true, total: true },
       }),
       prisma.invoicePayment.findMany({
-        where: { companyId, date: within(counted(period)), invoice: issued },
+        // A cheque that bounced paid nothing: it isn't on the statement.
+        where: { companyId, date: within(counted(period)), invoice: issued, status: { not: "bounced" } },
         select: {
           id: true,
           number: true,

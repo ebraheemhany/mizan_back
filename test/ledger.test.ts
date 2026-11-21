@@ -393,6 +393,54 @@ describe("the journal", () => {
   });
 });
 
+describe("bounced cheques", () => {
+  it("owed again, reversed in the books today, even when its month is closed", async () => {
+    const { token } = await ownerSession();
+    const customer = await customerOf(token);
+    const day = lastMonthDay();
+    const inv = await invoice(token, customer.id, { issueDate: day }); // 1140
+    const cheque = await pay(token, inv.id, { amount: "1140", method: "cheque", date: day });
+    const cash = await pay(token, (await invoice(token, customer.id)).id, { amount: "100" });
+    const lastMonthBefore = await ok(await get(token, `/trial-balance?month=${lastMonth()}`));
+    await ok(await post(token, "/periods/close", { month: lastMonth() }));
+
+    const bounced = await api().post(`/api/payments/${cheque.id}/bounce`).set(auth(token));
+    expect(bounced.status).toBe(200);
+    expect(bounced.body.payment).toMatchObject({ status: "bounced" });
+    expect(bounced.body.payment.bouncedAt).not.toBeNull();
+
+    // Owed again.
+    const after = (await ok(await api().get(`/api/invoices/${inv.id}`).set(auth(token)))).invoice;
+    // Unpaid again (overdue by now: it was issued last month).
+    expect(after.remaining).toBe("1140.00");
+    expect(["sent", "overdue"]).toContain(after.status);
+    expect(after.history.some((e: { type: string }) => e.type === "chequeBounced")).toBe(true);
+    const owed = await prisma.customer.findUniqueOrThrow({ where: { id: customer.id }, select: { balance: true } });
+    expect(owed.balance.toFixed(2)).toBe("2180.00"); // 1140 + (1140 - 100)
+
+    // The closed month is untouched; the reversal is today.
+    expect((await ok(await get(token, `/trial-balance?month=${lastMonth()}`))).rows).toEqual(lastMonthBefore.rows);
+    const { items } = await entries(token, "&source=payment");
+    const reversal = items.find((e) => e.source === "chequeBounced")!;
+    expect(reversal).toMatchObject({ date: today(), amount: "1140.00" });
+    expect(linesOf(reversal)).toEqual(["customers 1140.00/0.00", "cheques 0.00/1140.00"]);
+    const now = await balances(token);
+    expect(now.cheques).toBeUndefined();
+    expect(now.customers).toBe("2180.00");
+
+    // It stays on record; nothing else can bounce.
+    expect((await api().delete(`/api/payments/${cheque.id}`).set(auth(token))).body.error.code).toBe("PAYMENT_BOUNCED");
+    expect((await api().post(`/api/payments/${cheque.id}/bounce`).set(auth(token))).body.error.code).toBe("PAYMENT_NOT_PENDING");
+    expect((await api().post(`/api/payments/${cash.id}/bounce`).set(auth(token))).body.error.code).toBe("PAYMENT_NOT_PENDING");
+
+    // The customer's statement leaves it out; the audit log has it.
+    const statement = (await ok(await api().get(`/api/reports/statement?customerId=${customer.id}&period=${lastMonth()}`).set(auth(token)))).statement;
+    expect(statement.txns.map((t: { type: string }) => t.type)).toEqual(["invoice"]);
+    const audit = (await ok(await api().get("/api/audit?action=payment").set(auth(token)))).items;
+    expect(audit[0]).toMatchObject({ event: "chequeBounced", values: { amount: "1140.00" } });
+  });
+});
+
 describe("journal edge cases", () => {
   it("a free invoice isn't an entry; numbers past 9999 keep every digit in the search", async () => {
     const { token, companyId } = await ownerSession();

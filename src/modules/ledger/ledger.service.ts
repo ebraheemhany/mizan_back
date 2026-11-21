@@ -198,7 +198,7 @@ type LineDto = ReturnType<typeof accountRef> & { debit: string; credit: string }
 
 const SOURCES: Record<Exclude<ListEntriesQuery["source"], "all">, EntrySource[]> = {
   invoice: ["invoice"],
-  payment: ["payment", "chequeCleared"],
+  payment: ["payment", "chequeCleared", "chequeBounced"],
   expense: ["expense", "expensePayment"],
   manual: ["manual"],
 };
@@ -255,7 +255,7 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
       select: { id: true, number: true, numberPrefix: true, customerName: true },
     }),
     prisma.invoicePayment.findMany({
-      where: { companyId, id: { in: idsOf("payment", "chequeCleared") } },
+      where: { companyId, id: { in: idsOf("payment", "chequeCleared", "chequeBounced") } },
       select: {
         id: true,
         number: true,
@@ -324,7 +324,7 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
       const i = invoiceById.get(r.entryId);
       return { ...base, ref: i ? invoiceRef(i).displayNumber : null, party: i?.customerName ?? null, invoice: i ? invoiceRef(i) : null, lines: own };
     }
-    if (r.source === "payment" || r.source === "chequeCleared") {
+    if (r.source === "payment" || r.source === "chequeCleared" || r.source === "chequeBounced") {
       const p = paymentById.get(r.entryId);
       return {
         ...base,

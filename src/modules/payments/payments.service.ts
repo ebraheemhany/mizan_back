@@ -23,6 +23,7 @@ const paymentSelect = {
   reference: true,
   note: true,
   clearedAt: true,
+  bouncedAt: true,
   createdAt: true,
   invoice: {
     select: { id: true, number: true, numberPrefix: true, customerId: true, customerName: true, issueDate: true },
@@ -49,6 +50,7 @@ function toDto(row: PaymentRow) {
     reference: row.reference,
     note: row.note,
     clearedAt: row.clearedAt,
+    bouncedAt: row.bouncedAt,
     createdAt: row.createdAt,
   };
 }
@@ -290,11 +292,15 @@ export async function removePayment(actor: Actor, id: string) {
         date: true,
         clearedAt: true,
         method: true,
+        status: true,
         invoiceId: true,
         invoice: { select: { customerId: true, number: true, numberPrefix: true, customerName: true } },
       },
     });
     if (!payment) throw notFound("Payment");
+    if (payment.status === "bounced") {
+      throw new AppError(409, "PAYMENT_BOUNCED", "A bounced cheque stays on record and can't be removed");
+    }
     checkBooksOpen(closedThrough, [
       toIso(payment.date),
       payment.method === "cheque" && payment.clearedAt ? businessToday(payment.clearedAt) : null,
@@ -337,4 +343,75 @@ export async function removePayment(actor: Actor, id: string) {
       },
     });
   });
+}
+
+/**
+ * The bank returned a cheque. The payment stays (as history) marked bounced; its
+ * amount is owed again on the invoice and by the customer, and the books get a
+ * reversing entry dated today (the receipt's own entry, maybe in a closed month,
+ * is left alone). Only a cheque still waiting to clear can bounce.
+ */
+export async function bouncePayment(actor: Actor, id: string) {
+  const notPending = () =>
+    new AppError(409, "PAYMENT_NOT_PENDING", "Only a cheque that hasn't cleared yet can be marked as bounced");
+  await prisma.$transaction(async (tx) => {
+    // The company row first, like every write here (today is always open).
+    await lockBooks(tx, actor.companyId);
+    const payment = await tx.invoicePayment.findFirst({
+      where: { id, companyId: actor.companyId },
+      select: {
+        id: true,
+        number: true,
+        amount: true,
+        method: true,
+        status: true,
+        invoiceId: true,
+        invoice: { select: { customerId: true, number: true, numberPrefix: true, customerName: true } },
+      },
+    });
+    if (!payment) throw notFound("Payment");
+    if (payment.method !== "cheque" || payment.status !== "pending") throw notPending();
+
+    const { count } = await tx.invoicePayment.updateMany({
+      where: { id: payment.id, status: "pending" },
+      data: { status: "bounced", bouncedAt: new Date() },
+    });
+    if (count === 0) throw notPending();
+
+    // Owed again: take the amount back off the invoice, recomputing its status.
+    const updated = await tx.$executeRaw`
+      UPDATE "invoices"
+      SET "amountPaid" = "amountPaid" - ${payment.amount}::numeric,
+          "status" = (CASE WHEN "amountPaid" - ${payment.amount}::numeric = 0 THEN 'sent' ELSE 'partial' END)::"InvoiceStatus",
+          "updatedAt" = now()
+      WHERE "id" = ${payment.invoiceId}
+        AND "status" IN ('partial', 'paid')
+        AND "amountPaid" >= ${payment.amount}::numeric`;
+    if (updated === 0) throw notPending();
+
+    await tx.invoiceEvent.create({
+      data: {
+        invoiceId: payment.invoiceId,
+        type: "chequeBounced",
+        values: { amount: moneyString(payment.amount), payment: paymentNumber(payment.number) },
+        userId: actor.id,
+      },
+    });
+    await tx.customer.update({
+      where: { id: payment.invoice.customerId },
+      data: { balance: { increment: payment.amount }, lastActivityAt: new Date() },
+    });
+    await audit(tx, actor.companyId, {
+      action: "payment",
+      event: "chequeBounced",
+      item: { type: "invoice", id: payment.invoiceId, ref: `${payment.invoice.numberPrefix}${payment.invoice.number}` },
+      values: {
+        number: payment.invoice.number,
+        amount: moneyString(payment.amount),
+        payment: paymentNumber(payment.number),
+        customer: payment.invoice.customerName,
+      },
+    });
+  });
+  return getPayment(actor.companyId, id);
 }

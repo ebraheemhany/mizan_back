@@ -279,6 +279,8 @@ enum PaymentMethod {
 enum PaymentStatus {
   cleared
   pending
+  // A cheque the bank returned: its amount is owed again (the payment stays, as history).
+  bounced
 }
 
 // Where the money went in.
@@ -295,6 +297,7 @@ enum InvoiceEventType {
   reminderSent
   payment
   paymentRemoved
+  chequeBounced
   cancelled
 }
 
@@ -396,6 +399,7 @@ model InvoicePayment {
   reference String?
   note      String?
   clearedAt DateTime?         @db.Timestamptz(3)
+  bouncedAt DateTime?         @db.Timestamptz(3)
   createdAt DateTime          @default(now()) @db.Timestamptz(3)
 
   companyId   String

@@ -38,6 +38,11 @@ export function createPaymentsRouter() {
     res.json({ payment: await payments.clearPayment(req.user!, parseId(req.params.id, "Payment")) });
   });
 
+  // The bank returned a pending cheque.
+  router.post("/:id/bounce", record, async (req, res) => {
+    res.json({ payment: await payments.bouncePayment(req.user!, parseId(req.params.id, "Payment")) });
+  });
+
   router.delete("/:id", record, async (req, res) => {
     await payments.removePayment(req.user!, parseId(req.params.id, "Payment"));
     res.status(204).end();

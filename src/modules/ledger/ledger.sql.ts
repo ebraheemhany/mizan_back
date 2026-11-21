@@ -10,13 +10,14 @@ import { Prisma } from "../../generated/prisma/client.js";
  *   payment         on its date: Dr where it went in / Cr customers.
  *                   A cheque goes into "cheques" until it clears.
  *   chequeCleared   the day a cheque cleared: Dr where it went in / Cr cheques
+ *   chequeBounced   the day a cheque bounced: Dr customers / Cr cheques (owed again)
  *   expense         on its date: Dr its category / Cr where it was paid from,
  *                   or Cr suppliers when it was saved as due
  *   expensePayment  a due expense paid later, on that day: Dr suppliers / Cr where it was paid from
  *
  * Drafts and cancelled invoices make no entry (same rule as the reports).
  */
-export type AutoSource = "invoice" | "payment" | "chequeCleared" | "expense" | "expensePayment";
+export type AutoSource = "invoice" | "payment" | "chequeCleared" | "chequeBounced" | "expense" | "expensePayment";
 export type EntrySource = AutoSource | "manual";
 
 /** Where a customer's payment went in: the account picked on it, else by method. */
@@ -59,6 +60,15 @@ export function autoLines(companyId: string) {
       ('cheques', 0::numeric, p."amount", 1)
     ) ${LINE}
     WHERE p."companyId" = ${companyId} AND p."method" = 'cheque' AND p."status" = 'cleared' AND p."clearedAt" IS NOT NULL
+
+    UNION ALL
+    SELECT 'chequeBounced', p."id", (p."bouncedAt" AT TIME ZONE 'Africa/Cairo')::date, l."key", l."debit", l."credit", l."position"
+    FROM "invoice_payments" p
+    CROSS JOIN LATERAL (VALUES
+      ('customers'::text, p."amount", 0::numeric, 0),
+      ('cheques', 0::numeric, p."amount", 1)
+    ) ${LINE}
+    WHERE p."companyId" = ${companyId} AND p."method" = 'cheque' AND p."status" = 'bounced' AND p."bouncedAt" IS NOT NULL
 
     UNION ALL
     SELECT 'expense', e."id", e."date", l."key", l."debit", l."credit", l."position"
@@ -104,6 +114,11 @@ export function entryHeaders(companyId: string) {
     SELECT 'chequeCleared', p."id", ${clearedOn}, p."clearedAt", 'posted', p."amount", ${paymentText}
     FROM "invoice_payments" p JOIN "invoices" i ON i."id" = p."invoiceId"
     WHERE p."companyId" = ${companyId} AND p."method" = 'cheque' AND p."status" = 'cleared' AND p."clearedAt" IS NOT NULL
+
+    UNION ALL
+    SELECT 'chequeBounced', p."id", (p."bouncedAt" AT TIME ZONE 'Africa/Cairo')::date, p."bouncedAt", 'posted', p."amount", ${paymentText}
+    FROM "invoice_payments" p JOIN "invoices" i ON i."id" = p."invoiceId"
+    WHERE p."companyId" = ${companyId} AND p."method" = 'cheque' AND p."status" = 'bounced' AND p."bouncedAt" IS NOT NULL
 
     UNION ALL
     SELECT 'expense', e."id", e."date", e."createdAt", 'posted', e."amount", ${expenseText}
