@@ -6,6 +6,7 @@ import { Decimal, invoiceTotals, money, moneyString, ZERO } from "../../lib/mone
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
+import { checkRecurringAllowed } from "../billing/plans.js";
 import { createInvoice, VAT_RATE } from "../invoices/invoices.service.js";
 import type { ListRecurringQuery, RecurringFrequency, RecurringInput } from "./recurring.schemas.js";
 
@@ -292,6 +293,7 @@ const templateData = (input: RecurringInput, totals: Awaited<ReturnType<typeof p
 });
 
 export async function createRecurring(actor: Actor, input: RecurringInput) {
+  await checkRecurringAllowed(prisma, actor.companyId);
   const today = businessToday();
   if (input.startDate < today) throw startDatePassed();
   await assertCustomer(actor.companyId, input.customerId);
@@ -406,6 +408,7 @@ export async function pauseRecurring(actor: Actor, id: string) {
 
 /** Resumes from the first scheduled date from today on: the dates missed while paused are skipped. */
 export async function resumeRecurring(actor: Actor, id: string) {
+  await checkRecurringAllowed(prisma, actor.companyId);
   const today = businessToday();
   const row = await prisma.recurringInvoice.findFirst({
     where: { id, companyId: actor.companyId },

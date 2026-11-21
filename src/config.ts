@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { z } from "zod";
 
+/** A number that may be left empty in .env. */
+const optionalId = z.preprocess((value) => (value === "" ? undefined : value), z.coerce.number().int().positive().optional());
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -23,6 +26,26 @@ const envSchema = z.object({
   // Must be on a domain verified in Resend (onboarding@resend.dev only reaches your own inbox).
   MAIL_FROM: z.string().default("Mizan <onboarding@resend.dev>"),
   MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
+  // Subscriptions through Paymob (Egypt). Without the keys, development uses a
+  // local test checkout page instead; production refuses to take payments.
+  PAYMOB_SECRET_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  PAYMOB_PUBLIC_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  PAYMOB_HMAC_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  // The card integration shown at checkout (it saves the card), and the MOTO one
+  // that charges the saved card for renewals (Paymob enables it on request).
+  PAYMOB_CARD_INTEGRATION_ID: optionalId,
+  PAYMOB_MOTO_INTEGRATION_ID: optionalId,
+  PAYMOB_API_URL: z.url().default("https://accept.paymob.com"),
+  PAYMOB_CHECKOUT_URL: z.url().default("https://eg.checkout.paymob.com"),
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().positive().default(60),
   EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().positive().default(72),
   CORS_ORIGIN: z

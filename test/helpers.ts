@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import request from "supertest";
 import { createApp } from "../src/app.js";
+import { addMonths, businessToday, toDate } from "../src/lib/dates.js";
 import { prisma } from "../src/lib/prisma.js";
 import { testMail } from "../src/lib/mailer.js";
 
@@ -23,7 +24,7 @@ export const decodeJwt = (token: string) =>
 export async function resetDatabase() {
   testMail.outbox.length = 0;
   testMail.fail = false;
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "account_tokens", "files", "deals", "audit_events", "journal_lines", "journal_entries", "ledger_accounts", "recurring_invoice_lines", "recurring_invoices", "expenses", "quote_events", "quote_lines", "quotes", "invoice_payments", "invoices", "products", "tasks", "customers", "invitations", "refresh_tokens", "users", "companies" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "billing_payments", "subscriptions", "account_tokens", "files", "deals", "audit_events", "journal_lines", "journal_entries", "ledger_accounts", "recurring_invoice_lines", "recurring_invoices", "expenses", "quote_events", "quote_lines", "quotes", "invoice_payments", "invoices", "products", "tasks", "customers", "invitations", "refresh_tokens", "users", "companies" CASCADE`);
 }
 
 export async function registerUser(email = uniqueEmail(), password = PASSWORD) {
@@ -48,11 +49,21 @@ export async function refreshLifetimeDays(refreshToken: string) {
 
 export const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-/** Registers a company and logs its owner in. */
-export async function ownerSession() {
+/**
+ * Registers a company and logs its owner in. It is on the business plan unless
+ * asked otherwise, so the plan limits (tested in billing.test.ts) don't get in the way.
+ */
+export async function ownerSession({ plan = "business" }: { plan?: "free" | "pro" | "business" } = {}) {
   const { email, user } = await registerUser();
+  const companyId = user.company.id as string;
+  if (plan !== "free") {
+    const today = businessToday();
+    await prisma.subscription.create({
+      data: { companyId, plan, status: "active", currentPeriodStart: toDate(today), currentPeriodEnd: toDate(addMonths(today, 1)) },
+    });
+  }
   const session = await login(email);
-  return { email, companyId: user.company.id as string, userId: user.id as string, token: session.accessToken };
+  return { email, companyId, userId: user.id as string, token: session.accessToken };
 }
 
 /** Owner invites someone; returns the invite token taken from the link. */
@@ -68,6 +79,17 @@ export async function teamMember(ownerToken: string, role = "accountant") {
   const { email, token } = await invite(ownerToken, role);
   const accepted = await api().post("/api/invitations/accept").send({ token, password: PASSWORD });
   if (accepted.status !== 201) throw new Error(`accept failed: ${accepted.status} ${JSON.stringify(accepted.body)}`);
-  const session = await login(email);
+  let session;
+  try {
+    session = await login(email);
+  } catch (err) {
+    // This has failed (rarely, only in full runs) right after a successful accept:
+    // say what the database held at that moment.
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true, createdAt: true } });
+    const inv = await prisma.invitation.findFirst({ where: { email }, select: { acceptedAt: true, revokedAt: true } });
+    const users = await prisma.user.count();
+    const detail = { user, acceptedId: accepted.body.user.id, inv, users, at: new Date().toISOString() };
+    throw new Error(`${(err as Error).message} | ${JSON.stringify(detail)}`);
+  }
   return { email, userId: accepted.body.user.id as string, token: session.accessToken, refreshToken: session.refreshToken };
 }

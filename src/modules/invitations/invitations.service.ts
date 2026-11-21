@@ -7,6 +7,7 @@ import { trySendMail } from "../../lib/mailer.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
+import { checkUserLimit } from "../billing/plans.js";
 import { sendVerificationLater } from "../auth/account-links.service.js";
 import { invitationEmail, type Locale } from "../email/templates.js";
 import { publicUserSelect } from "../users/public-user.js";
@@ -44,11 +45,15 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
   const token = generateToken();
 
   const invitation = await prisma.$transaction(async (tx) => {
+    // The plan's team size (members and pending invites). The company row is held so
+    // two invites at once can't both take the last seat.
+    await tx.$queryRaw`SELECT 1 FROM "companies" WHERE "id" = ${inviter.companyId} FOR UPDATE`;
     // Inviting the same email again replaces the earlier invite: its link stops working.
     await tx.invitation.updateMany({
       where: { companyId: inviter.companyId, email: input.email, ...pending() },
       data: { revokedAt: new Date() },
     });
+    await checkUserLimit(tx, inviter.companyId);
 
     const created = await tx.invitation.create({
       data: {

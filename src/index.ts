@@ -2,6 +2,7 @@ import { config } from "./config.js";
 import { createApp } from "./app.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
+import { startBillingJob } from "./modules/billing/billing.job.js";
 import { startRecurringJob } from "./modules/recurring/recurring.job.js";
 
 const server = createApp().listen(config.PORT, () => {
@@ -10,10 +11,13 @@ const server = createApp().listen(config.PORT, () => {
 
 // Makes the recurring invoices that are due (hourly).
 const stopRecurringJob = startRecurringJob();
+// Renews subscriptions (hourly).
+const stopBillingJob = startBillingJob();
 
 function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
   stopRecurringJob();
+  stopBillingJob();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

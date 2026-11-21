@@ -7,6 +7,7 @@ import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { sendMail } from "../../lib/mailer.js";
 import { audit } from "../audit/audit.service.js";
+import { checkInvoiceLimit } from "../billing/plans.js";
 import { customerMailSender, customerPageUrl, recipientOf } from "../email/customer-mail.js";
 import { invoiceEmail, reminderEmail, type Locale } from "../email/templates.js";
 import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
@@ -446,6 +447,9 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput, ori
       });
       // An issued invoice goes into the books on its date, which must be open (a draft doesn't, yet).
       if (input.send) checkBooksOpen(company.booksClosedThrough, [input.issueDate]);
+      // The plan's invoices for the month (counted while the company row is held, so two at once
+      // can't both take the last one). Recurring templates are a paid feature: their runs don't count.
+      if (!origin) await checkInvoiceLimit(tx, actor.companyId);
       const vatRate = company.vatEnabled ? VAT_RATE : 0;
       const { amounts, subtotal, vat, total } = invoiceTotals(input.items, vatRate);
       const now = Date.now();

@@ -3,6 +3,7 @@ import { businessToday, daysBetween, monthRange, toDate, toIso } from "../../lib
 import { moneyString, ZERO } from "../../lib/money.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
+import { invoicesMadeThisMonth } from "../billing/plans.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
 import { STALE_DAYS } from "../deals/deals.service.js";
 import { invoiceStats, overdueWhere } from "../invoices/invoices.service.js";
@@ -25,10 +26,8 @@ export async function dashboard(companyId: string, role: Role) {
       orderBy: [{ dueDate: "asc" }, { number: "asc" }],
       take: ATTENTION_LIMIT,
     }),
-    // For the plan card (invoices created this month, any status).
-    prisma.invoice.count({
-      where: { companyId, issueDate: { gte: toDate(thisMonth.start), lte: toDate(thisMonth.end) } },
-    }),
+    // For the plan card: invoices made this month (what the free plan's limit counts).
+    invoicesMadeThisMonth(prisma, companyId, today),
     // Open deals quiet for a while (a day more than needed, then counted in Cairo days below).
     prisma.deal.findMany({
       where: {

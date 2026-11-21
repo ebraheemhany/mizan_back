@@ -25,6 +25,14 @@ export default defineConfig({
     env: {
       NODE_ENV: "test",
       LOG_LEVEL: "silent",
+      // Never the real services, whatever .env holds: email stays in memory, payments use the test gateway.
+      RESEND_API_KEY: "",
+      PAYMOB_SECRET_KEY: "",
+      PAYMOB_PUBLIC_KEY: "",
+      PAYMOB_CARD_INTEGRATION_ID: "",
+      PAYMOB_MOTO_INTEGRATION_ID: "",
+      // Signs the Paymob callbacks the tests send.
+      PAYMOB_HMAC_SECRET: "test-hmac-secret",
       DATABASE_URL: testDatabaseUrl,
     },
   },

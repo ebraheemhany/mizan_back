@@ -22,6 +22,7 @@ import { createLedgerRouter } from "./modules/ledger/ledger.routes.js";
 import { createAuditRouter } from "./modules/audit/audit.routes.js";
 import { createDealsRouter } from "./modules/deals/deals.routes.js";
 import { createPublicLogosRouter } from "./modules/files/files.routes.js";
+import { createBillingRouter, createPaymobWebhookRouter, createTestCheckoutRouter } from "./modules/billing/billing.routes.js";
 import { requestContext } from "./lib/request-context.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
@@ -71,6 +72,10 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/audit", createAuditRouter());
   app.use("/api/deals", createDealsRouter());
   app.use("/api/public/logos", createPublicLogosRouter());
+  // The test checkout before the billing router (that one needs a login).
+  app.use("/api/billing/test-checkout", createTestCheckoutRouter());
+  app.use("/api/billing", createBillingRouter());
+  app.use("/api/public/paymob", createPaymobWebhookRouter());
   app.use("/api/quotes", createQuotesRouter(limiters));
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
 
