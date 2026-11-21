@@ -59,7 +59,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/customers", createCustomersRouter());
   app.use("/api/products", createProductsRouter());
   app.use("/api/settings", createSettingsRouter());
-  app.use("/api/invoices", createInvoicesRouter());
+  app.use("/api/invoices", createInvoicesRouter(limiters));
   app.use("/api/public/invoices", createPublicInvoicesRouter());
   app.use("/api/payments", createPaymentsRouter());
   app.use("/api/dashboard", createDashboardRouter());
@@ -71,7 +71,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/audit", createAuditRouter());
   app.use("/api/deals", createDealsRouter());
   app.use("/api/public/logos", createPublicLogosRouter());
-  app.use("/api/quotes", createQuotesRouter());
+  app.use("/api/quotes", createQuotesRouter(limiters));
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
 
   app.use(notFound);

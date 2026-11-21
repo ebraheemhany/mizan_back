@@ -51,6 +51,16 @@ export type AuthRateLimiters = {
   invitationToken: RequestHandler;
   /** Accept/reject answers on public quote links from one IP (no login on that page). */
   publicQuoteAnswer: RequestHandler;
+  /** "Forgot password" from one IP, across any addresses. */
+  forgotPasswordPerIp: RequestHandler;
+  /** "Forgot password" for one address (stops flooding someone's inbox). */
+  forgotPasswordPerEmail: RequestHandler;
+  /** Bad password-reset / email-confirmation links from one IP. */
+  accountToken: RequestHandler;
+  /** "Send the confirmation link again", per user. Must run after `authenticate`. */
+  resendVerification: RequestHandler;
+  /** Emails to customers (invoices, quotes, reminders), per user. Must run after `authenticate`. */
+  customerEmail: RequestHandler;
 };
 
 /**
@@ -67,6 +77,11 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       changePassword: passThrough,
       invitationToken: passThrough,
       publicQuoteAnswer: passThrough,
+      forgotPasswordPerIp: passThrough,
+      forgotPasswordPerEmail: passThrough,
+      accountToken: passThrough,
+      resendVerification: passThrough,
+      customerEmail: passThrough,
     };
   }
 
@@ -107,6 +122,37 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       limit: 30,
       onlyFailures: false,
       key: (req) => `public-quote:${clientIp(req)}`,
+    }),
+    forgotPasswordPerIp: createLimiter({
+      windowMs: 60 * MINUTE,
+      limit: 10,
+      onlyFailures: false,
+      key: (req) => `forgot-ip:${clientIp(req)}`,
+    }),
+    forgotPasswordPerEmail: createLimiter({
+      windowMs: 60 * MINUTE,
+      limit: 3,
+      onlyFailures: false,
+      // Runs after validation, so the email is already trimmed and lowercased.
+      key: (req) => `forgot:${String(req.body?.email)}`,
+    }),
+    accountToken: createLimiter({
+      windowMs: 15 * MINUTE,
+      limit: 20,
+      onlyFailures: true,
+      key: (req) => `account-token:${clientIp(req)}`,
+    }),
+    resendVerification: createLimiter({
+      windowMs: 15 * MINUTE,
+      limit: 3,
+      onlyFailures: false,
+      key: (req) => `resend-verification:${req.user?.id ?? clientIp(req)}`,
+    }),
+    customerEmail: createLimiter({
+      windowMs: 60 * MINUTE,
+      limit: 60,
+      onlyFailures: false,
+      key: (req) => `customer-email:${req.user?.id ?? clientIp(req)}`,
     }),
   };
 }

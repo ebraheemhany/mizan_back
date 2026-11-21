@@ -117,3 +117,19 @@ describe("public quote answers rate limit", () => {
     expect((await api().get(`/api/public/quotes/${token}`)).status).toBe(404);
   });
 });
+
+describe("forgot-password rate limit", () => {
+  it("3 emails per address an hour (any case), 10 requests per IP", async () => {
+    const email = uniqueEmail();
+    for (let i = 0; i < 3; i++) {
+      expect((await api().post("/api/auth/forgot-password").send({ email })).status).toBe(204);
+    }
+    expectBlocked(await api().post("/api/auth/forgot-password").send({ email: email.toUpperCase() }));
+
+    // Other addresses still go, until the IP has asked 10 times.
+    for (let i = 0; i < 6; i++) {
+      expect((await api().post("/api/auth/forgot-password").send({ email: uniqueEmail() })).status).toBe(204);
+    }
+    expectBlocked(await api().post("/api/auth/forgot-password").send({ email: uniqueEmail() }));
+  });
+});

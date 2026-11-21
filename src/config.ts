@@ -12,6 +12,19 @@ const envSchema = z.object({
   // Base URL of the frontend, used to build invite links.
   APP_URL: z.url().default("http://localhost:3000"),
   INVITATION_TTL_DAYS: z.coerce.number().positive().default(7),
+  // Public base URL of this API (company logos in emails point here).
+  API_URL: z.url().default("http://localhost:4000"),
+  // Email, sent through Resend. Without a key nothing leaves the machine: in
+  // development each email is written to MAIL_OUTBOX_DIR instead (open the .html).
+  RESEND_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
+  // Must be on a domain verified in Resend (onboarding@resend.dev only reaches your own inbox).
+  MAIL_FROM: z.string().default("Mizan <onboarding@resend.dev>"),
+  MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().positive().default(60),
+  EMAIL_VERIFICATION_TTL_HOURS: z.coerce.number().positive().default(72),
   CORS_ORIGIN: z
     .string()
     .default("http://localhost:3000")

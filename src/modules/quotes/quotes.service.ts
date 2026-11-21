@@ -15,9 +15,18 @@ import { Decimal, invoiceTotals, moneyString, ZERO, type LineInput } from "../..
 import { notFound } from "../../lib/params.js";
 import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
+import { sendMail } from "../../lib/mailer.js";
 import { audit } from "../audit/audit.service.js";
+import { customerMailSender, customerPageUrl, recipientOf } from "../email/customer-mail.js";
+import { quoteEmail } from "../email/templates.js";
 import { VAT_RATE } from "../invoices/invoices.service.js";
-import type { CreateQuoteInput, ListQuotesQuery, QuoteListStatus, UpdateQuoteInput } from "./quotes.schemas.js";
+import type {
+  CreateQuoteInput,
+  EmailQuoteInput,
+  ListQuotesQuery,
+  QuoteListStatus,
+  UpdateQuoteInput,
+} from "./quotes.schemas.js";
 
 type Actor = { id: string; companyId: string; role: Role };
 type Tx = Prisma.TransactionClient;
@@ -618,6 +627,59 @@ async function missingOr(db: Tx, id: string, otherwise: AppError) {
 // ---------------------------------------------------------------------------
 
 /** Sends a draft: it gets its public link. */
+/**
+ * Emails a sent quote (a link to its page, where the customer accepts or
+ * declines) to the customer. Only while it can still be answered.
+ */
+export async function emailQuote(actor: Actor, ref: QuoteRef, input: EmailQuoteInput) {
+  const row = await findRow(prisma, actor.companyId, ref, {
+    id: true,
+    status: true,
+    number: true,
+    numberPrefix: true,
+    total: true,
+    validUntil: true,
+    customerName: true,
+    customerEmail: true,
+    publicToken: true,
+    customer: { select: { email: true } },
+    company: { select: { currency: true } },
+  });
+  if (displayStatus(row, businessToday()).status !== "sent" || !row.publicToken) {
+    throw new AppError(409, "QUOTE_NOT_EMAILABLE", "Only a sent quote that hasn't expired or been answered can be emailed");
+  }
+  const sender = await customerMailSender(actor);
+  const to = recipientOf(input.to, row.customer?.email, row.customerEmail);
+  const number = `${row.numberPrefix}${row.number}`;
+  await sendMail(
+    quoteEmail(
+      input.locale,
+      to,
+      sender,
+      {
+        number,
+        customer: row.customerName,
+        total: moneyString(row.total),
+        currency: row.company.currency,
+        validUntil: toIso(row.validUntil),
+        url: customerPageUrl(input.locale, `share/quotes/${row.publicToken}`),
+      },
+      input.message,
+    ),
+  );
+
+  await prisma.$transaction(async (tx) => {
+    await tx.quoteEvent.create({ data: { quoteId: row.id, type: "emailed", values: { to }, userId: actor.id } });
+    await audit(tx, actor.companyId, {
+      action: "send",
+      event: "quoteEmailed",
+      item: { type: "quote", id: row.id, ref: number },
+      values: { number: row.number, to, customer: row.customerName },
+    });
+  });
+  return getQuote(actor.companyId, ref);
+}
+
 export async function sendQuote(actor: Actor, ref: QuoteRef) {
   const today = businessToday();
   await prisma.$transaction(async (tx) => {

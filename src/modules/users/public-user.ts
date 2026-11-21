@@ -7,6 +7,8 @@ export const publicUserSelect = {
   fullName: true,
   role: true,
   createdAt: true,
+  // null until the user opens the link emailed to them.
+  emailVerifiedAt: true,
   company: { select: { id: true, name: true } },
 } satisfies Prisma.UserSelect;
 

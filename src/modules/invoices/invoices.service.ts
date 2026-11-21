@@ -5,10 +5,19 @@ import { AppError } from "../../lib/errors.js";
 import { Decimal, invoiceTotals, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
+import { sendMail } from "../../lib/mailer.js";
 import { audit } from "../audit/audit.service.js";
+import { customerMailSender, customerPageUrl, recipientOf } from "../email/customer-mail.js";
+import { invoiceEmail, reminderEmail, type Locale } from "../email/templates.js";
 import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { markQuoteConverted } from "../quotes/quote-conversion.js";
-import type { CreateInvoiceInput, ListInvoicesQuery, RecordPaymentInput, ReminderInput } from "./invoices.schemas.js";
+import type {
+  CreateInvoiceInput,
+  EmailInvoiceInput,
+  ListInvoicesQuery,
+  RecordPaymentInput,
+  ReminderInput,
+} from "./invoices.schemas.js";
 
 /** Egypt's standard VAT rate, used when VAT is on in the company settings. */
 export const VAT_RATE = 14;
@@ -741,30 +750,98 @@ export async function bulkCancel(actor: Actor, ids: string[]) {
   return { cancelled, skipped: new Set(ids).size - cancelled };
 }
 
+// ---------------------------------------------------------------------------
+// Emailing the customer
+// ---------------------------------------------------------------------------
+
+const mailSelect = {
+  id: true,
+  status: true,
+  number: true,
+  numberPrefix: true,
+  issueDate: true,
+  dueDate: true,
+  total: true,
+  amountPaid: true,
+  customerName: true,
+  customerEmail: true,
+  publicToken: true,
+  customer: { select: { email: true } },
+  company: { select: { currency: true } },
+} satisfies Prisma.InvoiceSelect;
+
+type MailRow = Prisma.InvoiceGetPayload<{ select: typeof mailSelect }>;
+
+/** The invoice as the email shows it, with the link to its public page. */
+function mailFacts(row: MailRow, locale: Locale) {
+  return {
+    number: `${row.numberPrefix}${row.number}`,
+    customer: row.customerName,
+    issueDate: toIso(row.issueDate),
+    dueDate: toIso(row.dueDate),
+    total: moneyString(row.total),
+    remaining: moneyString(remainingOf(row)),
+    currency: row.company.currency,
+    paid: row.status === "paid",
+    overdue: displayStatus(row, businessToday()).status === "overdue",
+    url: customerPageUrl(locale, `i/${row.publicToken}`),
+  };
+}
+
 /**
- * Records that a reminder was sent. Nothing is actually delivered yet: email and
- * WhatsApp sending come later.
+ * Emails an issued invoice (a link to its page) to the customer. Drafts have no
+ * page yet and cancelled invoices aren't owed: neither can be emailed.
+ */
+export async function emailInvoice(actor: Actor, ref: InvoiceRef, input: EmailInvoiceInput) {
+  const row = await findRow(prisma, actor.companyId, ref, mailSelect);
+  if (!["sent", "partial", "paid"].includes(row.status) || !row.publicToken) {
+    throw new AppError(409, "INVOICE_NOT_EMAILABLE", "Only an issued invoice that isn't cancelled can be emailed");
+  }
+  const sender = await customerMailSender(actor);
+  const to = recipientOf(input.to, row.customer.email, row.customerEmail);
+  await sendMail(invoiceEmail(input.locale, to, sender, mailFacts(row, input.locale), input.message));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.invoiceEvent.create({ data: { invoiceId: row.id, type: "emailed", values: { to }, userId: actor.id } });
+    await audit(tx, actor.companyId, {
+      action: "send",
+      event: "invoiceEmailed",
+      item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+      values: { number: row.number, to, customer: row.customerName },
+    });
+  });
+  return getInvoice(actor.companyId, ref);
+}
+
+/**
+ * A payment reminder. By email it is sent from here (the user's words, the
+ * invoice and its link); by WhatsApp the app opens WhatsApp and this records it.
  */
 export async function recordReminder(actor: Actor, ref: InvoiceRef, input: ReminderInput) {
-  const row = await findRow(prisma, actor.companyId, ref, {
-    id: true,
-    status: true,
-    number: true,
-    numberPrefix: true,
-    customerName: true,
-  });
+  const row = await findRow(prisma, actor.companyId, ref, mailSelect);
   if (!OPEN.includes(row.status)) {
     throw new AppError(409, "INVOICE_NOT_REMINDABLE", "Reminders are only for sent invoices that aren't fully paid");
   }
+  let to: string | undefined;
+  if (input.channel === "email") {
+    const sender = await customerMailSender(actor);
+    to = recipientOf(input.to, row.customer.email, row.customerEmail);
+    await sendMail(reminderEmail(input.locale, to, sender, mailFacts(row, input.locale), input.message));
+  }
   await prisma.$transaction(async (tx) => {
     await tx.invoiceEvent.create({
-      data: { invoiceId: row.id, type: "reminderSent", values: { channel: input.channel }, userId: actor.id },
+      data: {
+        invoiceId: row.id,
+        type: "reminderSent",
+        values: { channel: input.channel, ...(to ? { to } : {}) },
+        userId: actor.id,
+      },
     });
     await audit(tx, actor.companyId, {
       action: "send",
       event: "reminderSent",
       item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
-      values: { number: row.number, channel: input.channel, customer: row.customerName },
+      values: { number: row.number, channel: input.channel, customer: row.customerName, ...(to ? { to } : {}) },
     });
   });
   return getInvoice(actor.companyId, ref);

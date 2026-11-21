@@ -29,7 +29,7 @@ describe("POST /api/invitations (create)", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.invitation).toMatchObject({ email, name: "Sara Ali", role: "sales", invitedBy: { id: owner.userId } });
-    expect(res.body.inviteUrl).toMatch(/^http:\/\/localhost:3000\/invite\/[\w-]{43}$/);
+    expect(res.body.inviteUrl).toMatch(/^http:\/\/localhost:3000\/ar\/invite\/[\w-]{43}$/);
 
     // Only the hash is stored, and the token is not in the response anywhere else.
     const token = new URL(res.body.inviteUrl).pathname.split("/").pop()!;

@@ -3,10 +3,10 @@ import { notFound } from "../../lib/params.js";
 import { authenticate, requirePermission } from "../../middleware/auth.js";
 import type { AuthRateLimiters } from "../../middleware/rate-limit.js";
 import { parseQuery, validateBody } from "../../middleware/validate.js";
-import { createQuoteSchema, listQuotesQuerySchema, updateQuoteSchema } from "./quotes.schemas.js";
+import { createQuoteSchema, emailQuoteSchema, listQuotesQuerySchema, updateQuoteSchema } from "./quotes.schemas.js";
 import * as quotes from "./quotes.service.js";
 
-export function createQuotesRouter() {
+export function createQuotesRouter(limit: AuthRateLimiters) {
   const router = Router();
   router.use(authenticate);
 
@@ -40,6 +40,10 @@ export function createQuotesRouter() {
 
   router.post("/:ref/send", write, async (req, res) => {
     res.json({ quote: await quotes.sendQuote(req.user!, ref(req)) });
+  });
+
+  router.post("/:ref/email", write, limit.customerEmail, validateBody(emailQuoteSchema), async (req, res) => {
+    res.json({ quote: await quotes.emailQuote(req.user!, ref(req), req.body) });
   });
 
   router.post("/:ref/accept", write, async (req, res) => {

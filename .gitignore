@@ -2,3 +2,5 @@ node_modules
 .env
 dist
 /src/generated/prisma
+# Emails written locally when RESEND_API_KEY is not set
+.mail-outbox

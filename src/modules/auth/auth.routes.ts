@@ -2,8 +2,18 @@ import { Router } from "express";
 import { authenticate } from "../../middleware/auth.js";
 import type { AuthRateLimiters } from "../../middleware/rate-limit.js";
 import { validateBody } from "../../middleware/validate.js";
-import { changePasswordSchema, loginSchema, refreshTokenSchema, registerSchema } from "./auth.schemas.js";
+import {
+  accountTokenSchema,
+  changePasswordSchema,
+  forgotPasswordSchema,
+  localeSchema,
+  loginSchema,
+  refreshTokenSchema,
+  registerSchema,
+  resetPasswordSchema,
+} from "./auth.schemas.js";
 import * as authService from "./auth.service.js";
+import * as links from "./account-links.service.js";
 import { revokeSession, rotateRefreshToken } from "./tokens.js";
 
 export function createAuthRouter(limit: AuthRateLimiters) {
@@ -44,6 +54,43 @@ export function createAuthRouter(limit: AuthRateLimiters) {
     validateBody(changePasswordSchema),
     async (req, res) => {
       res.json(await authService.changePassword(req.user!.id, req.body));
+    },
+  );
+
+  // Always the same answer, whether or not the address has an account.
+  router.post(
+    "/forgot-password",
+    validateBody(forgotPasswordSchema),
+    limit.forgotPasswordPerIp,
+    limit.forgotPasswordPerEmail,
+    (req, res) => {
+      links.requestPasswordReset(req.body.email, req.body.locale);
+      res.status(204).end();
+    },
+  );
+
+  router.get("/reset-password/:token", limit.accountToken, async (req, res) => {
+    res.json(await links.previewPasswordReset(String(req.params.token).slice(0, 200)));
+  });
+
+  router.post("/reset-password", limit.accountToken, validateBody(resetPasswordSchema), async (req, res) => {
+    await links.resetPassword(req.body.token, req.body.password);
+    res.status(204).end();
+  });
+
+  // No login needed: the link may be opened on another device.
+  router.post("/verify-email", limit.accountToken, validateBody(accountTokenSchema), async (req, res) => {
+    res.json(await links.verifyEmail(req.body.token));
+  });
+
+  router.post(
+    "/verify-email/resend",
+    authenticate,
+    limit.resendVerification,
+    validateBody(localeSchema),
+    async (req, res) => {
+      await links.resendVerification(req.user!.id, req.body.locale);
+      res.status(204).end();
     },
   );
 

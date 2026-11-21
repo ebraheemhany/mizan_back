@@ -120,6 +120,8 @@ model User {
   role              Role      @default(viewer)
   // Access tokens issued before this moment are rejected (set on password change).
   passwordChangedAt DateTime? @db.Timestamptz(3)
+  // When the user opened the link sent to this address (or reset the password through it).
+  emailVerifiedAt   DateTime? @db.Timestamptz(3)
   createdAt         DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
 
@@ -142,6 +144,7 @@ model User {
   ownedDeals        Deal[]             @relation("DealOwner")
   uploadedFiles     StoredFile[]
   createdDeals      Deal[]             @relation("DealCreator")
+  accountTokens     AccountToken[]
 
   @@index([companyId])
   @@map("users")
@@ -214,6 +217,30 @@ model Invitation {
 // One row per issued refresh token. Only a SHA-256 hash is stored, never the token.
 // Every login starts a "family"; each refresh revokes the used token and adds a
 // new one to the same family. Reusing a revoked token revokes the whole family.
+enum AccountTokenPurpose {
+  passwordReset
+  emailVerification
+}
+
+// A one-time link emailed to a user (reset the password, confirm the address).
+// Only the hash is stored; the token itself lives only in the email.
+model AccountToken {
+  id        String              @id @default(uuid())
+  purpose   AccountTokenPurpose
+  tokenHash String              @unique
+  // The address it went to: confirming only counts while the user still has it.
+  email     String
+  expiresAt DateTime            @db.Timestamptz(3)
+  usedAt    DateTime?           @db.Timestamptz(3)
+  createdAt DateTime            @default(now()) @db.Timestamptz(3)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("account_tokens")
+}
+
 model RefreshToken {
   id         String    @id @default(uuid())
   tokenHash  String    @unique
@@ -301,6 +328,7 @@ enum InvoiceEventType {
   sent
   viewed
   reminderSent
+  emailed
   payment
   paymentRemoved
   chequeBounced
@@ -549,6 +577,7 @@ enum QuoteStatus {
 enum QuoteEventType {
   created
   sent
+  emailed
   accepted
   rejected
   converted

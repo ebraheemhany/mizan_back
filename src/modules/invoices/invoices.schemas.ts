@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { email, locale } from "../auth/auth.schemas.js";
 import { isIsoDate } from "../../lib/dates.js";
 
 /** A calendar date, "yyyy-mm-dd". */
@@ -59,8 +60,21 @@ export const recordPaymentSchema = z.object({
 
 export const reminderSchema = z.object({
   channel: z.enum(["email", "whatsapp"]),
-  recipient: z.string().trim().min(1).max(200),
+  /** WhatsApp: the number it was sent to (recorded only; the app opens WhatsApp itself). */
+  recipient: z.string().trim().max(200).optional(),
+  /** Email: another address than the customer's. */
+  to: email.optional(),
   message: z.string().trim().min(1).max(600),
+  locale,
+});
+
+/** Emailing an issued invoice to the customer (a link to its page). */
+export const emailInvoiceSchema = z.object({
+  /** Another address than the customer's. */
+  to: email.optional(),
+  /** Replaces the standard greeting. */
+  message: z.string().trim().max(2000).optional(),
+  locale,
 });
 
 export const bulkCancelSchema = z.object({ ids: z.array(z.uuid()).min(1).max(200) });
@@ -80,4 +94,5 @@ export const listInvoicesQuerySchema = z.object({
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
 export type ReminderInput = z.infer<typeof reminderSchema>;
+export type EmailInvoiceInput = z.infer<typeof emailInvoiceSchema>;
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;

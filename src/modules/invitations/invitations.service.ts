@@ -3,9 +3,12 @@ import { Prisma } from "../../generated/prisma/client.js";
 import { generateToken, hashToken } from "../../lib/crypto.js";
 import { AppError } from "../../lib/errors.js";
 import { notFound } from "../../lib/params.js";
+import { trySendMail } from "../../lib/mailer.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
+import { sendVerificationLater } from "../auth/account-links.service.js";
+import { invitationEmail, type Locale } from "../email/templates.js";
 import { publicUserSelect } from "../users/public-user.js";
 import type { AcceptInvitationInput, CreateInvitationInput } from "./invitations.schemas.js";
 
@@ -29,7 +32,7 @@ const invalidInvitation = () =>
 
 const emailTaken = () => new AppError(409, "EMAIL_TAKEN", "An account with this email already exists");
 
-const inviteUrl = (token: string) => new URL(`/invite/${token}`, config.APP_URL).toString();
+const inviteUrl = (token: string, locale: Locale) => new URL(`/${locale}/invite/${token}`, config.APP_URL).toString();
 
 type Inviter = { id: string; companyId: string };
 
@@ -68,8 +71,27 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
     return created;
   });
 
+  // The link goes to the invitee by email. If that fails the invite still stands:
+  // the owner can copy the link and send it another way.
+  const url = inviteUrl(token, input.locale);
+  const sender = await prisma.user.findUniqueOrThrow({
+    where: { id: inviter.id },
+    select: { fullName: true, company: { select: { name: true } } },
+  });
+  const emailSent = await trySendMail(
+    invitationEmail(input.locale, {
+      email: input.email,
+      name: input.name,
+      role: input.role,
+      inviter: sender.fullName,
+      company: sender.company.name,
+      url,
+      days: config.INVITATION_TTL_DAYS,
+    }),
+  );
+
   // The token is only ever returned here, inside the link. It cannot be read back later.
-  return { invitation, inviteUrl: inviteUrl(token) };
+  return { invitation, inviteUrl: url, emailSent };
 }
 
 export function listPendingInvitations(companyId: string) {
@@ -117,7 +139,7 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
   const passwordHash = await hashPassword(input.password);
 
   try {
-    return await prisma.$transaction(async (tx) => {
+    const user = await prisma.$transaction(async (tx) => {
       // Claim the invite. The conditions make this atomic: if the same link is
       // accepted twice at once, only one request gets count === 1.
       const { count } = await tx.invitation.updateMany({
@@ -151,6 +173,9 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
       );
       return user;
     });
+    // The invite link may have been passed on by hand: the address still needs confirming.
+    sendVerificationLater({ id: user.id, email: user.email, fullName: user.fullName, companyId: user.company.id }, input.locale);
+    return user;
   } catch (err) {
     // Someone registered with this email after the invite was sent. The transaction
     // rolled back, so the invite stays pending.

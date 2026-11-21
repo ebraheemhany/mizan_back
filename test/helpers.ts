@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { prisma } from "../src/lib/prisma.js";
+import { testMail } from "../src/lib/mailer.js";
 
 // Rate limiting is off here: these tests send many requests from one IP.
 // test/rate-limit.test.ts covers the limits with their real settings.
@@ -20,7 +21,9 @@ export const decodeJwt = (token: string) =>
   JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString()) as { iat: number; exp: number; sub: string };
 
 export async function resetDatabase() {
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "files", "deals", "audit_events", "journal_lines", "journal_entries", "ledger_accounts", "recurring_invoice_lines", "recurring_invoices", "expenses", "quote_events", "quote_lines", "quotes", "invoice_payments", "invoices", "products", "tasks", "customers", "invitations", "refresh_tokens", "users", "companies" CASCADE`);
+  testMail.outbox.length = 0;
+  testMail.fail = false;
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "account_tokens", "files", "deals", "audit_events", "journal_lines", "journal_entries", "ledger_accounts", "recurring_invoice_lines", "recurring_invoices", "expenses", "quote_events", "quote_lines", "quotes", "invoice_payments", "invoices", "products", "tasks", "customers", "invitations", "refresh_tokens", "users", "companies" CASCADE`);
 }
 
 export async function registerUser(email = uniqueEmail(), password = PASSWORD) {

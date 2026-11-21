@@ -1,14 +1,18 @@
 import { z } from "zod";
+import { LOCALES } from "../email/templates.js";
 
 export const email = z.string().trim().toLowerCase().pipe(z.email());
 // Upper bound stops someone sending a huge string to make hashing slow.
 export const newPassword = z.string().min(8).max(128);
+/** The language of the emails this request sends (the page's language). */
+export const locale = z.enum(LOCALES).default("ar");
 
 export const registerSchema = z.object({
   fullName: z.string().trim().min(3).max(100),
   companyName: z.string().trim().min(1).max(150),
   email,
   password: newPassword,
+  locale,
 });
 
 export const loginSchema = z.object({
@@ -21,6 +25,14 @@ export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
   newPassword,
 });
+
+export const forgotPasswordSchema = z.object({ email, locale });
+
+export const accountTokenSchema = z.object({ token: z.string().min(1).max(200) });
+
+export const resetPasswordSchema = accountTokenSchema.extend({ password: newPassword });
+
+export const localeSchema = z.object({ locale });
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;

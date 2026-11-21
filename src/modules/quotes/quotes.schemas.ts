@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { email, locale } from "../auth/auth.schemas.js";
 import { isoDate, lineSchema, optionalText } from "../invoices/invoices.schemas.js";
 
 /** The fields of a quote, shared by create and edit (edit replaces the whole draft). */
@@ -40,7 +41,16 @@ export const listQuotesQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+/** Emailing a sent quote to the customer (a link to its page, where they accept or decline). */
+export const emailQuoteSchema = z.object({
+  to: email.optional(),
+  /** Replaces the standard greeting. */
+  message: z.string().trim().max(2000).optional(),
+  locale,
+});
+
 export type CreateQuoteInput = z.infer<typeof createQuoteSchema>;
+export type EmailQuoteInput = z.infer<typeof emailQuoteSchema>;
 export type UpdateQuoteInput = z.infer<typeof updateQuoteSchema>;
 export type ListQuotesQuery = z.infer<typeof listQuotesQuerySchema>;
 export type QuoteListStatus = (typeof quoteListStatuses)[number];

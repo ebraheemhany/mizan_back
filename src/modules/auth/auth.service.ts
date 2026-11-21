@@ -6,6 +6,7 @@ import type { ChangePasswordInput, LoginInput, RegisterInput } from "./auth.sche
 import { publicUserSelect, type PublicUser } from "../users/public-user.js";
 import { issueTokens, revokeAllSessions, type TokenUser } from "./tokens.js";
 import { audit } from "../audit/audit.service.js";
+import { sendVerificationLater } from "./account-links.service.js";
 
 
 const toTokenUser = (user: PublicUser): TokenUser => ({ id: user.id, companyId: user.company.id, role: user.role });
@@ -41,6 +42,9 @@ export async function register(input: RegisterInput) {
     }
     throw err;
   }
+
+  // The "confirm your email" link goes out in the background.
+  sendVerificationLater({ id: user.id, email: user.email, fullName: user.fullName, companyId: user.company.id }, input.locale);
 
   // No tokens here: after signing up, the user logs in to start a session.
   return { user };

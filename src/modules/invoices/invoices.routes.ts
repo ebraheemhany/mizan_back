@@ -1,16 +1,18 @@
 import { Router } from "express";
 import { authenticate, requirePermission } from "../../middleware/auth.js";
+import type { AuthRateLimiters } from "../../middleware/rate-limit.js";
 import { parseQuery, validateBody } from "../../middleware/validate.js";
 import {
   bulkCancelSchema,
   createInvoiceSchema,
+  emailInvoiceSchema,
   listInvoicesQuerySchema,
   recordPaymentSchema,
   reminderSchema,
 } from "./invoices.schemas.js";
 import * as invoices from "./invoices.service.js";
 
-export function createInvoicesRouter() {
+export function createInvoicesRouter(limit: AuthRateLimiters) {
   const router = Router();
   router.use(authenticate);
 
@@ -59,7 +61,12 @@ export function createInvoicesRouter() {
     res.status(201).json({ invoice: await invoices.recordPayment(req.user!, ref, req.body) });
   });
 
-  router.post("/:ref/reminders", issue, validateBody(reminderSchema), async (req, res) => {
+  router.post("/:ref/email", issue, limit.customerEmail, validateBody(emailInvoiceSchema), async (req, res) => {
+    const ref = invoices.parseInvoiceRef(req.params.ref);
+    res.json({ invoice: await invoices.emailInvoice(req.user!, ref, req.body) });
+  });
+
+  router.post("/:ref/reminders", issue, limit.customerEmail, validateBody(reminderSchema), async (req, res) => {
     const ref = invoices.parseInvoiceRef(req.params.ref);
     res.status(201).json({ invoice: await invoices.recordReminder(req.user!, ref, req.body) });
   });
