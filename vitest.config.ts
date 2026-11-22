@@ -27,6 +27,10 @@ export default defineConfig({
       LOG_LEVEL: "silent",
       // Never the real services, whatever .env holds: email stays in memory, payments use the test gateway.
       RESEND_API_KEY: "",
+      GMAIL_SENDER: "",
+      GMAIL_CLIENT_ID: "",
+      GMAIL_CLIENT_SECRET: "",
+      GMAIL_REFRESH_TOKEN: "",
       PAYMOB_SECRET_KEY: "",
       PAYMOB_PUBLIC_KEY: "",
       PAYMOB_CARD_INTEGRATION_ID: "",

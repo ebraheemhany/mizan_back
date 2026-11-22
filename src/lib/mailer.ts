@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { config } from "../config.js";
 import { AppError } from "./errors.js";
+import { createGmailSender, GmailError } from "./gmail.js";
 import { logger } from "./logger.js";
 
 export type Mail = {
@@ -9,7 +10,7 @@ export type Mail = {
   subject: string;
   html: string;
   text: string;
-  /** Shown as the sender's name (the address is always MAIL_FROM's). */
+  /** Shown as the sender's name (the address is always MAIL_FROM's, or the Gmail account's). */
   fromName?: string;
   /** Where the recipient's answer goes (e.g. the user who sent an invoice). */
   replyTo?: string;
@@ -23,11 +24,29 @@ export type Mail = {
  */
 export const testMail = { outbox: [] as Mail[], fail: false };
 
-/** Delivery failed (Resend refused it or couldn't be reached). */
+/** Delivery failed (Resend or Gmail refused it or couldn't be reached). */
 export const mailFailed = () =>
   new AppError(502, "EMAIL_FAILED", "The email couldn't be sent right now; try again in a few minutes");
 
 const RESEND_URL = "https://api.resend.com/emails";
+
+/** The Gmail account, when it's the one sending (no Resend key, all GMAIL_* values set). */
+const gmail =
+  !config.RESEND_API_KEY &&
+  config.GMAIL_CLIENT_ID &&
+  config.GMAIL_CLIENT_SECRET &&
+  config.GMAIL_REFRESH_TOKEN &&
+  config.GMAIL_SENDER
+    ? createGmailSender({
+        clientId: config.GMAIL_CLIENT_ID,
+        clientSecret: config.GMAIL_CLIENT_SECRET,
+        refreshToken: config.GMAIL_REFRESH_TOKEN,
+        sender: config.GMAIL_SENDER,
+      })
+    : null;
+
+/** MAIL_FROM's display name ("Mizan" in `Mizan <x@y>`), for Gmail where the address is the account's. */
+const defaultName = config.MAIL_FROM.match(/^\s*"?([^"<]*?)"?\s*</)?.[1]?.trim() || "Mizan";
 
 /** MAIL_FROM's address with another display name ("شركة النور" <billing@mizan.app>). */
 function fromHeader(name?: string) {
@@ -45,9 +64,19 @@ export async function sendMail(mail: Mail): Promise<void> {
     testMail.outbox.push(mail);
     return;
   }
+  if (gmail) {
+    try {
+      await gmail({ fromName: mail.fromName ?? defaultName, to: mail.to, subject: mail.subject, html: mail.html, text: mail.text, replyTo: mail.replyTo });
+    } catch (err) {
+      const { status, body } = err instanceof GmailError ? err.detail : {};
+      logger.error({ err, status, body, tag: mail.tag }, "Gmail could not send an email");
+      throw mailFailed();
+    }
+    return;
+  }
   if (!config.RESEND_API_KEY) {
     if (config.NODE_ENV === "production") {
-      logger.error({ tag: mail.tag }, "RESEND_API_KEY is not set: email not sent");
+      logger.error({ tag: mail.tag }, "No email service is set (RESEND_API_KEY or the GMAIL_* values): email not sent");
       throw mailFailed();
     }
     await writeToOutbox(mail);
@@ -101,5 +130,5 @@ async function writeToOutbox(mail: Mail) {
   const file = path.join(dir, `${stamp}-${mail.tag}-${safeTo}.html`);
   const head = `<!--\nFrom: ${fromHeader(mail.fromName)}\nTo: ${mail.to}\nReply-To: ${mail.replyTo ?? ""}\nSubject: ${mail.subject}\n-->\n`;
   await writeFile(file, head + mail.html, "utf8");
-  logger.info({ to: mail.to, subject: mail.subject, file }, "Email written to the outbox (no RESEND_API_KEY)");
+  logger.info({ to: mail.to, subject: mail.subject, file }, "Email written to the outbox (no email service set)");
 }

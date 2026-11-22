@@ -4,6 +4,14 @@ import { z } from "zod";
 /** A number that may be left empty in .env. */
 const optionalId = z.preprocess((value) => (value === "" ? undefined : value), z.coerce.number().int().positive().optional());
 
+/** Text that may be left empty in .env. */
+const optionalText = z
+  .string()
+  .optional()
+  .transform((value) => value?.trim() || undefined);
+
+const GMAIL_KEYS = ["GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN", "GMAIL_SENDER"] as const;
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -17,14 +25,18 @@ const envSchema = z.object({
   INVITATION_TTL_DAYS: z.coerce.number().positive().default(7),
   // Public base URL of this API (company logos in emails point here).
   API_URL: z.url().default("http://localhost:4000"),
-  // Email, sent through Resend. Without a key nothing leaves the machine: in
-  // development each email is written to MAIL_OUTBOX_DIR instead (open the .html).
-  RESEND_API_KEY: z
-    .string()
-    .optional()
-    .transform((value) => value?.trim() || undefined),
-  // Must be on a domain verified in Resend (onboarding@resend.dev only reaches your own inbox).
+  // Email goes through Resend (needs a domain of our own) or, without one, a Gmail
+  // account (the GMAIL_* values, from `npm run gmail:token`); Resend wins if both are
+  // set. With neither, nothing leaves the machine: in development each email is
+  // written to MAIL_OUTBOX_DIR instead (open the .html).
+  RESEND_API_KEY: optionalText,
+  // Resend only: must be on a domain verified in Resend (onboarding@resend.dev only
+  // reaches your own inbox). With Gmail just its name is used ("Mizan").
   MAIL_FROM: z.string().default("Mizan <onboarding@resend.dev>"),
+  GMAIL_CLIENT_ID: optionalText,
+  GMAIL_CLIENT_SECRET: optionalText,
+  GMAIL_REFRESH_TOKEN: optionalText,
+  GMAIL_SENDER: z.preprocess((value) => (typeof value === "string" && value.trim() === "" ? undefined : value), z.email().optional()),
   MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
   // Subscriptions through Paymob (Egypt). Without the keys, development uses a
   // local test checkout page instead; production refuses to take payments.
@@ -60,6 +72,14 @@ const envSchema = z.object({
     .default("false")
     .transform((value) => (value === "false" ? false : /^\d+$/.test(value) ? Number(value) : value)),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+}).superRefine((env, ctx) => {
+  // Half a Gmail setup would silently send nothing: all four or none.
+  const set = GMAIL_KEYS.filter((key) => env[key] !== undefined);
+  if (set.length > 0 && set.length < GMAIL_KEYS.length) {
+    for (const key of GMAIL_KEYS.filter((k) => env[k] === undefined)) {
+      ctx.addIssue({ code: "custom", path: [key], message: "Set all four GMAIL_* values, or none" });
+    }
+  }
 });
 
 const parsed = envSchema.safeParse(process.env);

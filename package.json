@@ -13,7 +13,8 @@
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "gmail:token": "tsx src/scripts/gmail-token.ts"
   },
   "keywords": [],
   "author": "",
