@@ -118,7 +118,10 @@ model User {
   id                String    @id @default(uuid())
   email             String    @unique
   fullName          String
-  passwordHash      String
+  // null: the account was made with Google and has no password yet ("forgot password" sets one).
+  passwordHash      String?
+  // Google's id for the account ("sub"), once the user has signed in with Google.
+  googleId          String?   @unique
   role              Role      @default(viewer)
   // Access tokens issued before this moment are rejected (set on password change).
   passwordChangedAt DateTime? @db.Timestamptz(3)

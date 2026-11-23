@@ -31,6 +31,8 @@ export default defineConfig({
       GMAIL_CLIENT_ID: "",
       GMAIL_CLIENT_SECRET: "",
       GMAIL_REFRESH_TOKEN: "",
+      // Tests sign their own Google ID tokens for this client (setGoogleKeysForTests).
+      GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
       PAYMOB_SECRET_KEY: "",
       PAYMOB_PUBLIC_KEY: "",
       PAYMOB_CARD_INTEGRATION_ID: "",

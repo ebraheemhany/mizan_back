@@ -37,6 +37,9 @@ const envSchema = z.object({
   GMAIL_CLIENT_SECRET: optionalText,
   GMAIL_REFRESH_TOKEN: optionalText,
   GMAIL_SENDER: z.preprocess((value) => (typeof value === "string" && value.trim() === "" ? undefined : value), z.email().optional()),
+  // "Sign in with Google": the Web application OAuth client's id (not secret; the same
+  // value as the frontend's NEXT_PUBLIC_GOOGLE_CLIENT_ID). Empty: the option is off.
+  GOOGLE_CLIENT_ID: optionalText,
   MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
   // Subscriptions through Paymob (Egypt). Without the keys, development uses a
   // local test checkout page instead; production refuses to take payments.

@@ -6,6 +6,7 @@ import {
   accountTokenSchema,
   changePasswordSchema,
   forgotPasswordSchema,
+  googleSignInSchema,
   localeSchema,
   loginSchema,
   refreshTokenSchema,
@@ -32,6 +33,12 @@ export function createAuthRouter(limit: AuthRateLimiters) {
       res.json(await authService.login(req.body));
     },
   );
+
+  // Signs in, links, joins an invitation or creates a company, with a Google ID token.
+  router.post("/google", validateBody(googleSignInSchema), limit.loginPerIp, async (req, res) => {
+    const { created, ...session } = await authService.continueWithGoogle(req.body);
+    res.status(created ? 201 : 200).json(session);
+  });
 
   // No access token needed: this is what the frontend calls when the access token has expired.
   router.post("/refresh", validateBody(refreshTokenSchema), async (req, res) => {

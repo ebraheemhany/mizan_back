@@ -1,33 +1,39 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import { AppError, unauthorized } from "../../lib/errors.js";
+import { verifyGoogleIdToken, type GoogleProfile } from "../../lib/google-id.js";
 import { hashPassword, verifyAgainstDummy, verifyPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
-import type { ChangePasswordInput, LoginInput, RegisterInput } from "./auth.schemas.js";
-import { publicUserSelect, type PublicUser } from "../users/public-user.js";
+import type { ChangePasswordInput, GoogleSignInInput, LoginInput, RegisterInput } from "./auth.schemas.js";
+import { sessionUserSelect, toSessionUser, type PublicUser, type SessionUser } from "../users/public-user.js";
 import { issueTokens, revokeAllSessions, type TokenUser } from "./tokens.js";
 import { audit } from "../audit/audit.service.js";
+import { acceptInvitationWithGoogle } from "../invitations/invitations.service.js";
 import { sendVerificationLater } from "./account-links.service.js";
-
 
 const toTokenUser = (user: PublicUser): TokenUser => ({ id: user.id, companyId: user.company.id, role: user.role });
 
-export async function register(input: RegisterInput) {
-  const passwordHash = await hashPassword(input.password);
+const emailTaken = () => new AppError(409, "EMAIL_TAKEN", "An account with this email already exists");
 
-  let user: PublicUser;
+type NewOwner = {
+  email: string;
+  fullName: string;
+  companyName: string;
+  passwordHash: string | null;
+  googleId?: string;
+  emailVerifiedAt?: Date;
+};
+
+/** A new company and its owner, together: if one fails, neither is saved. */
+async function createCompany(owner: NewOwner): Promise<SessionUser> {
+  const { companyName, ...user } = owner;
   try {
-    // Company and its owner are created together: if one fails, neither is saved.
-    user = await prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data: {
-          email: input.email,
-          fullName: input.fullName,
-          passwordHash,
-          role: "owner",
-          company: { create: { name: input.companyName } },
-        },
-        select: publicUserSelect,
-      });
+    return await prisma.$transaction(async (tx) => {
+      const created = toSessionUser(
+        await tx.user.create({
+          data: { ...user, role: "owner", company: { create: { name: companyName } } },
+          select: sessionUserSelect,
+        }),
+      );
       await audit(
         tx,
         created.company.id,
@@ -37,11 +43,18 @@ export async function register(input: RegisterInput) {
       return created;
     });
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      throw new AppError(409, "EMAIL_TAKEN", "An account with this email already exists");
-    }
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") throw emailTaken();
     throw err;
   }
+}
+
+export async function register(input: RegisterInput) {
+  const user = await createCompany({
+    email: input.email,
+    fullName: input.fullName,
+    companyName: input.companyName,
+    passwordHash: await hashPassword(input.password),
+  });
 
   // The "confirm your email" link goes out in the background.
   sendVerificationLater({ id: user.id, email: user.email, fullName: user.fullName, companyId: user.company.id }, input.locale);
@@ -50,13 +63,93 @@ export async function register(input: RegisterInput) {
   return { user };
 }
 
+/**
+ * "Continue with Google", for every case: an account already linked to this Google
+ * account signs in; an account with the same (Google-verified) address gets linked
+ * and signs in; an invitation is accepted; and an unknown person gets a new company
+ * once they have given its name. Without a name the answer is GOOGLE_NO_ACCOUNT, with
+ * the name and address Google gave, so the page can ask for it.
+ */
+export async function continueWithGoogle(input: GoogleSignInInput) {
+  const google = await verifyGoogleIdToken(input.credential);
+
+  let user: SessionUser | null;
+  let created = false;
+  if (input.invitationToken) {
+    user = await acceptInvitationWithGoogle(input.invitationToken, google);
+    created = true;
+  } else {
+    user = await findOrLinkGoogleAccount(google);
+    if (!user) {
+      if (!input.companyName) {
+        throw new AppError(404, "GOOGLE_NO_ACCOUNT", "No account uses this Google account yet", {
+          email: google.email,
+          fullName: google.name,
+        });
+      }
+      user = await createCompany({
+        email: google.email,
+        fullName: google.name,
+        companyName: input.companyName,
+        passwordHash: null,
+        googleId: google.sub,
+        emailVerifiedAt: new Date(),
+      });
+      created = true;
+    }
+  }
+
+  const tokens = await issueTokens(toTokenUser(user), input.remember);
+  await audit(
+    prisma,
+    user.company.id,
+    { action: "login", event: "signedInWithGoogle", item: { type: "account", ref: user.email } },
+    { id: user.id, name: user.fullName },
+  );
+  return { ...tokens, user, created };
+}
+
+/** The account for this Google account: already linked, or linked now by its email address. */
+async function findOrLinkGoogleAccount(google: GoogleProfile): Promise<SessionUser | null> {
+  const linked = await prisma.user.findUnique({ where: { googleId: google.sub }, select: sessionUserSelect });
+  if (linked) return toSessionUser(linked);
+
+  const byEmail = await prisma.user.findUnique({
+    where: { email: google.email },
+    select: { ...sessionUserSelect, googleId: true },
+  });
+  if (!byEmail) return null;
+  // The address belongs to an account that signs in with a different Google account.
+  if (byEmail.googleId) {
+    throw new AppError(409, "GOOGLE_LINKED_ELSEWHERE", "This account is linked to another Google account");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // Google has verified the address, so it counts as confirmed here too.
+    const updated = await tx.user.update({
+      where: { id: byEmail.id },
+      data: { googleId: google.sub, emailVerifiedAt: byEmail.emailVerifiedAt ?? new Date() },
+      select: sessionUserSelect,
+    });
+    const user = toSessionUser(updated);
+    await audit(
+      tx,
+      user.company.id,
+      { action: "login", event: "googleLinked", item: { type: "account", ref: user.email } },
+      { id: user.id, name: user.fullName },
+    );
+    return user;
+  });
+}
+
 export async function login(input: LoginInput) {
   const found = await prisma.user.findUnique({
     where: { email: input.email },
-    select: { ...publicUserSelect, passwordHash: true },
+    select: sessionUserSelect,
   });
 
-  const valid = found
+  // An account made with Google has no password until it sets one: like a wrong one.
+  const valid = found?.passwordHash
     ? await verifyPassword(found.passwordHash, input.password)
     : await verifyAgainstDummy(input.password);
 
@@ -75,7 +168,7 @@ export async function login(input: LoginInput) {
     throw new AppError(401, "INVALID_CREDENTIALS", "Email or password is incorrect");
   }
 
-  const { passwordHash: _passwordHash, ...user } = found;
+  const user = toSessionUser(found);
   const tokens = await issueTokens(toTokenUser(user), input.remember);
   await audit(
     prisma,
@@ -87,9 +180,9 @@ export async function login(input: LoginInput) {
 }
 
 export async function getCurrentUser(userId: string) {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: publicUserSelect });
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: sessionUserSelect });
   if (!user) throw unauthorized();
-  return user;
+  return toSessionUser(user);
 }
 
 export async function changePassword(userId: string, input: ChangePasswordInput) {
@@ -97,7 +190,12 @@ export async function changePassword(userId: string, input: ChangePasswordInput)
     where: { id: userId },
     select: { passwordHash: true },
   });
-  if (!found || !(await verifyPassword(found.passwordHash, input.currentPassword))) {
+  if (!found) throw unauthorized();
+  // An account made with Google sets its first password without one to confirm.
+  if (
+    found.passwordHash !== null &&
+    !(input.currentPassword && (await verifyPassword(found.passwordHash, input.currentPassword)))
+  ) {
     throw new AppError(400, "INVALID_CURRENT_PASSWORD", "Current password is incorrect");
   }
 
@@ -109,11 +207,13 @@ export async function changePassword(userId: string, input: ChangePasswordInput)
   // Update the password, end every existing session (all devices), and start a
   // new one for this device — all or nothing.
   return prisma.$transaction(async (tx) => {
-    const user = await tx.user.update({
-      where: { id: userId },
-      data: { passwordHash, passwordChangedAt },
-      select: publicUserSelect,
-    });
+    const user = toSessionUser(
+      await tx.user.update({
+        where: { id: userId },
+        data: { passwordHash, passwordChangedAt },
+        select: sessionUserSelect,
+      }),
+    );
     await revokeAllSessions(userId, tx);
     await audit(
       tx,

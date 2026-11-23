@@ -14,6 +14,20 @@ export const publicUserSelect = {
 
 export type PublicUser = Prisma.UserGetPayload<{ select: typeof publicUserSelect }>;
 
+/** What the logged-in user gets about themselves: also whether they have a password. */
+export const sessionUserSelect = { ...publicUserSelect, passwordHash: true } satisfies Prisma.UserSelect;
+
+export type SessionUser = PublicUser & {
+  /** false for an account made with Google that never set one (no "current password" to ask). */
+  hasPassword: boolean;
+};
+
+/** Drops the hash itself: only whether there is one leaves the server. */
+export function toSessionUser(row: Prisma.UserGetPayload<{ select: typeof sessionUserSelect }>): SessionUser {
+  const { passwordHash, ...user } = row;
+  return { ...user, hasPassword: passwordHash !== null };
+}
+
 /** A member of the team, as the owner sees it in the team list. */
 export const teamMemberSelect = {
   id: true,

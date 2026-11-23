@@ -22,9 +22,24 @@ export const loginSchema = z.object({
 });
 
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1).max(128),
+  // Left out by an account made with Google that is setting its first password.
+  currentPassword: z.string().min(1).max(128).optional(),
   newPassword,
 });
+
+/**
+ * "Continue with Google": the ID token Google gave the page. With companyName, an
+ * unknown account is created (a new company, its owner); with invitationToken, the
+ * invitation is accepted with this Google account instead of a password.
+ */
+export const googleSignInSchema = z.object({
+  credential: z.string().min(20).max(5000),
+  remember: z.boolean().default(false),
+  companyName: registerSchema.shape.companyName.optional(),
+  invitationToken: z.string().trim().min(1).max(200).optional(),
+});
+
+export type GoogleSignInInput = z.infer<typeof googleSignInSchema>;
 
 export const forgotPasswordSchema = z.object({ email, locale });
 

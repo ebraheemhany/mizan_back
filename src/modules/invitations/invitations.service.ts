@@ -10,7 +10,8 @@ import { audit } from "../audit/audit.service.js";
 import { checkUserLimit } from "../billing/plans.js";
 import { sendVerificationLater } from "../auth/account-links.service.js";
 import { invitationEmail, type Locale } from "../email/templates.js";
-import { publicUserSelect } from "../users/public-user.js";
+import type { GoogleProfile } from "../../lib/google-id.js";
+import { sessionUserSelect, toSessionUser } from "../users/public-user.js";
 import type { AcceptInvitationInput, CreateInvitationInput } from "./invitations.schemas.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -142,29 +143,60 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
   if (!found) throw invalidInvitation();
 
   const passwordHash = await hashPassword(input.password);
+  const user = await joinCompany(found.id, (invitation) => ({ fullName: input.fullName ?? invitation.name, passwordHash }));
+  // The invite link may have been passed on by hand: the address still needs confirming.
+  sendVerificationLater({ id: user.id, email: user.email, fullName: user.fullName, companyId: user.company.id }, input.locale);
+  return user;
+}
 
+/**
+ * Accepts the invitation with a Google account instead of a password. It must be the
+ * invited address: the link alone could have been forwarded to anyone. Google has
+ * verified that address, so it counts as confirmed.
+ */
+export async function acceptInvitationWithGoogle(token: string, google: GoogleProfile) {
+  const found = await prisma.invitation.findFirst({
+    where: { tokenHash: hashToken(token), ...pending() },
+    select: { id: true, email: true },
+  });
+  if (!found) throw invalidInvitation();
+  if (found.email.toLowerCase() !== google.email) {
+    throw new AppError(403, "GOOGLE_EMAIL_MISMATCH", "This invitation is for another email address", { email: found.email });
+  }
+  return joinCompany(found.id, () => ({
+    fullName: google.name,
+    passwordHash: null,
+    googleId: google.sub,
+    emailVerifiedAt: new Date(),
+  }));
+}
+
+type NewMember = { fullName: string; passwordHash: string | null; googleId?: string; emailVerifiedAt?: Date };
+
+/** Claims the invitation and creates the member, all or nothing. */
+async function joinCompany(invitationId: string, member: (invitation: { name: string }) => NewMember) {
   try {
-    const user = await prisma.$transaction(async (tx) => {
+    return await prisma.$transaction(async (tx) => {
       // Claim the invite. The conditions make this atomic: if the same link is
       // accepted twice at once, only one request gets count === 1.
       const { count } = await tx.invitation.updateMany({
-        where: { id: found.id, ...pending() },
+        where: { id: invitationId, ...pending() },
         data: { acceptedAt: new Date() },
       });
       if (count === 0) throw invalidInvitation();
 
-      const invitation = await tx.invitation.findUniqueOrThrow({ where: { id: found.id } });
+      const invitation = await tx.invitation.findUniqueOrThrow({ where: { id: invitationId } });
 
-      const user = await tx.user.create({
+      const created = await tx.user.create({
         data: {
           email: invitation.email,
-          fullName: input.fullName ?? invitation.name,
-          passwordHash,
+          ...member(invitation),
           role: invitation.role,
           companyId: invitation.companyId,
         },
-        select: publicUserSelect,
+        select: sessionUserSelect,
       });
+      const user = toSessionUser(created);
       await audit(
         tx,
         invitation.companyId,
@@ -178,9 +210,6 @@ export async function acceptInvitation(input: AcceptInvitationInput) {
       );
       return user;
     });
-    // The invite link may have been passed on by hand: the address still needs confirming.
-    sendVerificationLater({ id: user.id, email: user.email, fullName: user.fullName, companyId: user.company.id }, input.locale);
-    return user;
   } catch (err) {
     // Someone registered with this email after the invite was sent. The transaction
     // rolled back, so the invite stays pending.
