@@ -18,6 +18,7 @@ import { createReportsRouter } from "./modules/reports/reports.routes.js";
 import { createSettingsRouter } from "./modules/settings/settings.routes.js";
 import { createTasksRouter } from "./modules/tasks/tasks.routes.js";
 import { createRecurringRouter } from "./modules/recurring/recurring.routes.js";
+import { createEmployeesRouter, createPayrollRouter } from "./modules/payroll/payroll.routes.js";
 import { createLedgerRouter } from "./modules/ledger/ledger.routes.js";
 import { createAuditRouter } from "./modules/audit/audit.routes.js";
 import { createDealsRouter } from "./modules/deals/deals.routes.js";
@@ -78,6 +79,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/reports", createReportsRouter());
   app.use("/api/tasks", createTasksRouter());
   app.use("/api/recurring", createRecurringRouter());
+  app.use("/api/employees", createEmployeesRouter());
+  app.use("/api/payroll", createPayrollRouter());
   app.use("/api/ledger", createLedgerRouter());
   app.use("/api/audit", createAuditRouter());
   app.use("/api/deals", createDealsRouter());

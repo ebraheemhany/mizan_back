@@ -15,6 +15,8 @@ export type Plan = {
   invoicesPerMonth: number | null;
   /** Recurring invoice templates. */
   recurring: boolean;
+  /** Employees and payroll. */
+  payroll: boolean;
 };
 
 export const PLANS: Record<PlanId, Plan> = {
@@ -24,6 +26,7 @@ export const PLANS: Record<PlanId, Plan> = {
     users: 1,
     invoicesPerMonth: 10,
     recurring: false,
+    payroll: false,
   },
   pro: {
     id: "pro",
@@ -31,6 +34,7 @@ export const PLANS: Record<PlanId, Plan> = {
     users: 10,
     invoicesPerMonth: null,
     recurring: true,
+    payroll: true,
   },
   business: {
     id: "business",
@@ -38,6 +42,7 @@ export const PLANS: Record<PlanId, Plan> = {
     users: 50,
     invoicesPerMonth: null,
     recurring: true,
+    payroll: true,
   },
 };
 
@@ -130,6 +135,14 @@ export async function checkRecurringAllowed(db: Db, companyId: string) {
       plan: plan.id,
       feature: "recurring",
     });
+  }
+}
+
+/** Employees and payroll are for the paid plans (the data stays if the plan ends; it opens again on upgrade). */
+export async function checkPayrollAllowed(db: Db, companyId: string) {
+  const plan = await currentPlan(db, companyId);
+  if (!plan.payroll) {
+    throw planLimit("PLAN_FEATURE", "Employees and payroll need a paid plan", { plan: plan.id, feature: "payroll" });
   }
 }
 

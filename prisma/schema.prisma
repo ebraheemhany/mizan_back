@@ -35,13 +35,15 @@ model Company {
   fiscalStartMonth   Int      @default(1)
 
   // Numbering: the next invoice is invoicePrefix + invoiceNextNumber (INV-1044).
-  invoicePrefix     String @default("INV-")
-  invoiceNextNumber Int    @default(1)
-  quotePrefix       String @default("Q-")
-  quoteNextNumber   Int    @default(1)
+  invoicePrefix      String @default("INV-")
+  invoiceNextNumber  Int    @default(1)
+  quotePrefix        String @default("Q-")
+  quoteNextNumber    Int    @default(1)
   // Receipts: PAY-0001, PAY-0002...
-  paymentNextNumber Int    @default(1)
-  paymentTermsDays  Int    @default(30)
+  paymentNextNumber  Int    @default(1)
+  // Employees: EMP-001, EMP-002...
+  employeeNextNumber Int    @default(1)
+  paymentTermsDays   Int    @default(30)
 
   // Invoice look.
   invoiceTemplate InvoiceTemplate @default(classic)
@@ -66,26 +68,32 @@ model Company {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  ledgerAccounts  LedgerAccount[]
-  subscription    Subscription?
-  billingPayments BillingPayment[]
-  paymentSetup    PaymentSetup?
-  paymentClaims   PaymentClaim[]
-  onlinePayments  OnlinePayment[]
-  auditEvents     AuditEvent[]
-  deals           Deal[]
-  files           StoredFile[]       @relation("CompanyFiles")
-  journalEntries  JournalEntry[]
-  users           User[]
-  invitations     Invitation[]
-  customers       Customer[]
-  products        Product[]
-  invoices        Invoice[]
-  payments        InvoicePayment[]
-  expenses        Expense[]
-  tasks           Task[]
-  quotes          Quote[]
-  recurring       RecurringInvoice[]
+  ledgerAccounts    LedgerAccount[]
+  subscription      Subscription?
+  billingPayments   BillingPayment[]
+  paymentSetup      PaymentSetup?
+  paymentClaims     PaymentClaim[]
+  onlinePayments    OnlinePayment[]
+  auditEvents       AuditEvent[]
+  deals             Deal[]
+  files             StoredFile[]       @relation("CompanyFiles")
+  journalEntries    JournalEntry[]
+  users             User[]
+  invitations       Invitation[]
+  customers         Customer[]
+  products          Product[]
+  invoices          Invoice[]
+  payments          InvoicePayment[]
+  expenses          Expense[]
+  tasks             Task[]
+  quotes            Quote[]
+  recurring         RecurringInvoice[]
+  employees         Employee[]
+  employeeAdvances  EmployeeAdvance[]
+  attendance        AttendanceEntry[]
+  employeeDocuments EmployeeDocument[]
+  payrollRuns       PayrollRun[]
+  payrollItems      PayrollItem[]
 
   @@map("companies")
 }
@@ -1002,6 +1010,8 @@ model Deal {
 enum FileKind {
   logo
   receipt
+  // On an employee's file (contract, ID...).
+  document
 }
 
 model StoredFile {
@@ -1020,10 +1030,11 @@ model StoredFile {
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
-  logoOf         Company?        @relation("CompanyLogo")
+  logoOf         Company?          @relation("CompanyLogo")
   receiptOf      Expense?
-  claimReceiptOf PaymentClaim?   @relation("ClaimReceipt")
-  proofOf        InvoicePayment? @relation("PaymentProof")
+  claimReceiptOf PaymentClaim?     @relation("ClaimReceipt")
+  proofOf        InvoicePayment?   @relation("PaymentProof")
+  documentOf     EmployeeDocument? @relation("EmployeeDocumentFile")
 
   @@index([companyId])
   @@map("files")
@@ -1242,4 +1253,203 @@ model OnlinePayment {
   @@unique([companyId, gatewayOrderId])
   @@index([invoiceId])
   @@map("online_payments")
+}
+
+// ---------------------------------------------------------------------------
+// Employees and payroll (paid plans; the "payroll" permission: owner + accountant)
+// ---------------------------------------------------------------------------
+
+enum EmployeeStatus {
+  active
+  // Left the company (end of service). Kept, with their pay history.
+  ended
+}
+
+model Employee {
+  id         String         @id @default(uuid())
+  // Sequential per company, shown as EMP-001.
+  number     Int
+  name       String
+  jobTitle   String?
+  department String?
+  phone      String?
+  email      String?
+  nationalId String?
+  address    String?
+  hireDate   DateTime       @db.Date
+  status     EmployeeStatus @default(active)
+  endDate    DateTime?      @db.Date
+  endReason  String?
+
+  // Monthly pay. Fixed allowances add to the base salary; the employee's insurance
+  // share and income tax (fixed amounts the accountant works out) come off it; the
+  // company's insurance share is a cost on top. A month's payroll copies them.
+  baseSalary        Decimal @db.Decimal(14, 2)
+  allowances        Decimal @default(0) @db.Decimal(14, 2)
+  insurance         Decimal @default(0) @db.Decimal(14, 2)
+  employerInsurance Decimal @default(0) @db.Decimal(14, 2)
+  incomeTax         Decimal @default(0) @db.Decimal(14, 2)
+
+  // How they are usually paid, and the details for it.
+  payAccount   ReceivingAccount @default(bank)
+  bankName     String?
+  bankAccount  String?
+  walletNumber String?
+
+  // Paid leave days a year (annual and casual leave come out of it).
+  leaveDays Int     @default(21)
+  notes     String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  advances     EmployeeAdvance[]
+  attendance   AttendanceEntry[]
+  documents    EmployeeDocument[]
+  payrollItems PayrollItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@map("employees")
+}
+
+// Money paid to an employee ahead of their salary. It is paid back by taking the
+// installment off each month's pay (payroll items' advanceDeduction), oldest first.
+model EmployeeAdvance {
+  id          String           @id @default(uuid())
+  amount      Decimal          @db.Decimal(14, 2)
+  installment Decimal          @db.Decimal(14, 2)
+  date        DateTime         @db.Date
+  paidFrom    ReceivingAccount
+  note        String?
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, employeeId])
+  @@map("employee_advances")
+}
+
+enum AttendanceKind {
+  // Not at work without leave: taken off the pay.
+  absence
+  // Out of the yearly paid-leave balance.
+  annualLeave
+  casualLeave
+  // Paid, not out of the balance.
+  sickLeave
+  // Taken off the pay.
+  unpaidLeave
+}
+
+// A day or a stretch of days inside one month (so a month's payroll can count it).
+model AttendanceEntry {
+  id        String         @id @default(uuid())
+  kind      AttendanceKind
+  from      DateTime       @db.Date
+  to        DateTime       @db.Date
+  // Usually the days from..to; can be a half day.
+  days      Decimal        @db.Decimal(5, 1)
+  note      String?
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, employeeId, from])
+  @@map("attendance_entries")
+}
+
+// A contract, an ID card... on an employee's file (an uploaded file).
+model EmployeeDocument {
+  id        String   @id @default(uuid())
+  title     String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  fileId     String     @unique
+  file       StoredFile @relation("EmployeeDocumentFile", fields: [fileId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  companyId  String
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("employee_documents")
+}
+
+enum PayrollStatus {
+  // Being prepared: amounts can still change; nothing in the books.
+  draft
+  // Final: the salaries are a cost of the month, owed to the employees.
+  approved
+  // Paid out (from each item's account) on paidOn.
+  paid
+}
+
+// One month's salaries.
+model PayrollRun {
+  id         String        @id @default(uuid())
+  // The month, as its first day.
+  month      DateTime      @db.Date
+  status     PayrollStatus @default(draft)
+  approvedAt DateTime?     @db.Timestamptz(3)
+  paidAt     DateTime?     @db.Timestamptz(3)
+  // The business day the salaries were paid.
+  paidOn     DateTime?     @db.Date
+  note       String?
+  createdAt  DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime      @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items     PayrollItem[]
+
+  @@unique([companyId, month])
+  @@map("payroll_runs")
+}
+
+// One employee's pay in a month (their payslip). The salary figures are copied
+// from the employee when the month is prepared, so later changes don't alter it.
+//   gross = baseSalary + allowances + bonus + overtime
+//   net   = gross - absenceDeduction - otherDeductions - insurance - incomeTax - advanceDeduction
+//   cost  = gross - absenceDeduction - otherDeductions + employerInsurance
+model PayrollItem {
+  id                String           @id @default(uuid())
+  name              String
+  jobTitle          String?
+  baseSalary        Decimal          @db.Decimal(14, 2)
+  allowances        Decimal          @default(0) @db.Decimal(14, 2)
+  bonus             Decimal          @default(0) @db.Decimal(14, 2)
+  overtime          Decimal          @default(0) @db.Decimal(14, 2)
+  // Days of absence and unpaid leave, and what they take off (a day = base / 30).
+  absenceDays       Decimal          @default(0) @db.Decimal(5, 1)
+  absenceDeduction  Decimal          @default(0) @db.Decimal(14, 2)
+  // Penalties and other deductions, with what they were for.
+  otherDeductions   Decimal          @default(0) @db.Decimal(14, 2)
+  deductionNote     String?
+  insurance         Decimal          @default(0) @db.Decimal(14, 2)
+  employerInsurance Decimal          @default(0) @db.Decimal(14, 2)
+  incomeTax         Decimal          @default(0) @db.Decimal(14, 2)
+  advanceDeduction  Decimal          @default(0) @db.Decimal(14, 2)
+  payAccount        ReceivingAccount
+  note              String?
+
+  runId      String
+  run        PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  companyId  String
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, employeeId])
+  @@index([companyId, employeeId])
+  @@map("payroll_items")
 }

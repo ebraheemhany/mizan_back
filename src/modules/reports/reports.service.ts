@@ -5,6 +5,7 @@ import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
 import { paymentNumber, VAT_RATE } from "../invoices/invoices.service.js";
+import { payrollCostByMonth, withPayroll } from "../payroll/payroll.service.js";
 import { ISSUED_SQL, ISSUED_STATUSES, revenueByMonth } from "./revenue.js";
 
 type Range = { start: string; end: string };
@@ -100,9 +101,10 @@ export async function summary(companyId: string, periodKey: string | undefined) 
   const firstMonth = `${months[0]}-01`;
   const span = { start: firstMonth < period.previous.start ? firstMonth : period.previous.start, end: period.to };
 
-  const [revenueMonths, expenseMonths, byCategory, collected, top] = await Promise.all([
+  const [revenueMonths, expenseOnlyMonths, payrollMonths, byCategory, collected, top] = await Promise.all([
     revenueByMonth(companyId, span),
     expensesByMonth(companyId, span.start),
+    payrollCostByMonth(companyId, span.start),
     prisma.expense.groupBy({
       by: ["category"],
       where: { companyId, date: within(counted(period)) },
@@ -116,7 +118,10 @@ export async function summary(companyId: string, periodKey: string | undefined) 
     topCustomers(companyId, counted(period)),
   ]);
 
+  // Approved payroll is a salaries cost, next to salaries entered as expenses.
+  const expenseMonths = withPayroll(expenseOnlyMonths, payrollMonths);
   const spent = new Map(byCategory.map((c) => [c.category, c._sum.amount ?? ZERO]));
+  spent.set("salaries", (spent.get("salaries") ?? ZERO).plus(sumMonths(payrollMonths, counted(period))));
   const spentOn = (category: ExpenseCategory) => spent.get(category) ?? ZERO;
 
   const revenue = sumMonths(revenueMonths, counted(period));

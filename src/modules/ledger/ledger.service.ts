@@ -200,6 +200,7 @@ const SOURCES: Record<Exclude<ListEntriesQuery["source"], "all">, EntrySource[]>
   invoice: ["invoice"],
   payment: ["payment", "chequeCleared", "chequeBounced"],
   expense: ["expense", "expensePayment"],
+  payroll: ["payroll", "payrollPayment", "advance"],
   manual: ["manual"],
 };
 
@@ -242,7 +243,7 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
   const idsOf = (...sources: EntrySource[]) => rows.filter((r) => sources.includes(r.source)).map((r) => r.entryId);
   const autoIds = [...new Set(rows.filter((r) => r.source !== "manual").map((r) => r.entryId))];
 
-  const [lines, invoices, payments, expenses, manual] = await Promise.all([
+  const [lines, invoices, payments, expenses, manual, runs, advances] = await Promise.all([
     autoIds.length
       ? prisma.$queryRaw<{ source: EntrySource; entryId: string; key: string; debit: Decimal; credit: Decimal }[]>`
           SELECT x."source", x."entryId", x."key", x."debit", x."credit"
@@ -276,6 +277,14 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
         lines: { select: { accountId: true, debit: true, credit: true }, orderBy: { position: "asc" } },
       },
     }),
+    prisma.payrollRun.findMany({
+      where: { companyId, id: { in: idsOf("payroll", "payrollPayment") } },
+      select: { id: true, month: true },
+    }),
+    prisma.employeeAdvance.findMany({
+      where: { companyId, id: { in: idsOf("advance") } },
+      select: { id: true, note: true, employee: { select: { id: true, name: true } } },
+    }),
   ]);
 
   const accounts = new Map(chart.map((a) => [a.id, a]));
@@ -289,6 +298,8 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
   const paymentById = new Map(payments.map((p) => [p.id, p]));
   const expenseById = new Map(expenses.map((e) => [e.id, e]));
   const manualById = new Map(manual.map((m) => [m.id, m]));
+  const runById = new Map(runs.map((r) => [r.id, r]));
+  const advanceById = new Map(advances.map((a) => [a.id, a]));
   const invoiceRef = (i: { number: number; numberPrefix: string }) => ({
     number: i.number,
     displayNumber: `${i.numberPrefix}${i.number}`,
@@ -307,6 +318,9 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
       invoice: null as { number: number; displayNumber: string } | null,
       method: null as string | null,
       category: null as string | null,
+      // Payroll entries: the month (YYYY-MM); an advance: the employee.
+      month: null as string | null,
+      employee: null as { id: string; name: string } | null,
     };
     if (r.source === "manual") {
       const m = manualById.get(r.entryId);
@@ -334,6 +348,14 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
         method: p?.method ?? null,
         lines: own,
       };
+    }
+    if (r.source === "payroll" || r.source === "payrollPayment") {
+      const run = runById.get(r.entryId);
+      return { ...base, month: run ? toIso(run.month).slice(0, 7) : null, lines: own };
+    }
+    if (r.source === "advance") {
+      const a = advanceById.get(r.entryId);
+      return { ...base, memo: a?.note ?? null, party: a?.employee.name ?? null, employee: a?.employee ?? null, lines: own };
     }
     const e = expenseById.get(r.entryId);
     return { ...base, memo: e?.title ?? null, party: e?.vendor ?? null, category: e?.category ?? null, lines: own };

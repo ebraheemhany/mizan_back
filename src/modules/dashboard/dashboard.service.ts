@@ -5,6 +5,7 @@ import { can } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { invoicesMadeThisMonth } from "../billing/plans.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
+import { payrollCostByMonth, withPayroll } from "../payroll/payroll.service.js";
 import { STALE_DAYS } from "../deals/deals.service.js";
 import { invoiceStats, overdueWhere } from "../invoices/invoices.service.js";
 import { revenueByMonth } from "../reports/revenue.js";
@@ -82,10 +83,13 @@ export async function dashboard(companyId: string, role: Role) {
   }
 
   const firstMonth = monthRange(today, -(CHART_MONTHS - 1)).start;
-  const [revenue, expenses] = await Promise.all([
+  const [revenue, expenseOnly, payroll] = await Promise.all([
     revenueByMonth(companyId, { start: firstMonth, end: thisMonth.end }),
     expensesByMonth(companyId, firstMonth),
+    payrollCostByMonth(companyId, firstMonth),
   ]);
+  // Approved payroll counts as spending in its month.
+  const expenses = withPayroll(expenseOnly, payroll);
   const chart = Array.from({ length: CHART_MONTHS }, (_, i) => {
     const month = monthRange(today, i - (CHART_MONTHS - 1)).start.slice(0, 7);
     return {

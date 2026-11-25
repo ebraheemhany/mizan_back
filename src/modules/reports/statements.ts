@@ -159,7 +159,8 @@ export async function cashFlow(companyId: string, periodKey: string | undefined)
     if (row.source === "payment" || row.source === "chequeCleared") add("operating", "customers", cash);
     else if (row.source === "expense" || row.source === "expensePayment") {
       add("operating", categories.get(row.entryId) ?? "otherExpenses", cash);
-    }
+    } else if (row.source === "payrollPayment") add("operating", "salaries", cash);
+    else if (row.source === "advance") add("operating", "employeeAdvances", cash);
   }
   for (const entry of manual) {
     let cash = ZERO;

@@ -10,6 +10,7 @@ type Actor = { id: string; companyId: string };
 export const FILE_RULES: Record<FileKind, { maxBytes: number; types: readonly string[] }> = {
   logo: { maxBytes: 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp"] },
   receipt: { maxBytes: 5 * 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp", "application/pdf"] },
+  document: { maxBytes: 5 * 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp", "application/pdf"] },
 };
 
 /**

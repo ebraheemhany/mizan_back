@@ -13,11 +13,18 @@ export const SYSTEM_ACCOUNTS = [
   // A customer's cheque until it clears.
   { key: "cheques", code: "1040", type: "asset" },
   { key: "customers", code: "1100", type: "asset" },
+  // Salary advances, owed back by the employees (taken off their pay).
+  { key: "employeeAdvances", code: "1160", type: "asset" },
   { key: "fixedAssets", code: "1500", type: "asset" },
   // Expenses saved as due, until they are paid.
   { key: "suppliers", code: "2100", type: "liability" },
   { key: "vat", code: "2200", type: "liability" },
   { key: "loans", code: "2300", type: "liability" },
+  // Payroll: net pay owed to employees until paid; insurance (both shares) and income
+  // tax withheld, owed to the government until paid (with a manual entry).
+  { key: "salariesPayable", code: "2410", type: "liability" },
+  { key: "socialInsurance", code: "2420", type: "liability" },
+  { key: "payrollTax", code: "2430", type: "liability" },
   { key: "capital", code: "3000", type: "equity" },
   { key: "retained", code: "3100", type: "equity" },
   { key: "drawings", code: "3200", type: "equity" },

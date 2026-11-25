@@ -190,6 +190,23 @@ const TEXT = {
       validUntil: "ساري حتى",
       button: "عرض السعر والرد عليه",
     },
+    payslip: {
+      subject: (month: string, company: string) => `قسيمة مرتب ${month} من ${company}`,
+      heading: (month: string) => `قسيمة مرتب ${month}`,
+      body: (company: string, month: string, net: string) => `دي قسيمة مرتبك عن ${month} من ${company}، وصافي المرتب ${net}.`,
+      base: "الراتب الأساسي",
+      allowances: "البدلات",
+      bonus: "حوافز ومكافآت",
+      overtime: "إضافي",
+      gross: "إجمالي المستحق",
+      absence: (days: string) => `غياب وإجازة بدون مرتب (${days} يوم)`,
+      other: "خصومات أخرى",
+      insurance: "التأمينات الاجتماعية",
+      tax: "ضريبة كسب العمل",
+      advance: "قسط السلفة",
+      net: "صافي المرتب",
+      paidOn: "تاريخ الصرف",
+    },
   },
   en: {
     brand: "Mizan",
@@ -249,6 +266,23 @@ const TEXT = {
       total: "Total",
       validUntil: "Valid until",
       button: "View and respond",
+    },
+    payslip: {
+      subject: (month: string, company: string) => `${month} payslip from ${company}`,
+      heading: (month: string) => `Payslip, ${month}`,
+      body: (company: string, month: string, net: string) => `Here is your payslip for ${month} from ${company}. Your net pay is ${net}.`,
+      base: "Base salary",
+      allowances: "Allowances",
+      bonus: "Bonuses",
+      overtime: "Overtime",
+      gross: "Gross pay",
+      absence: (days: string) => `Absence and unpaid leave (${days} days)`,
+      other: "Other deductions",
+      insurance: "Social insurance",
+      tax: "Income tax",
+      advance: "Advance installment",
+      net: "Net pay",
+      paidOn: "Paid on",
     },
   },
 };
@@ -426,6 +460,78 @@ export function quoteEmail(
         [t.quote.validUntil, until],
       ],
       button: { label: t.quote.button, url: quote.url },
+      footer: t.footerCompany(from.company),
+    }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Payslips (to a company's employees, through Mizan)
+// ---------------------------------------------------------------------------
+
+type PayslipFacts = {
+  month: string;
+  paidOn: string | null;
+  company: { name: string; currency: string };
+  item: {
+    name: string;
+    baseSalary: string;
+    allowances: string;
+    bonus: string;
+    overtime: string;
+    gross: string;
+    absenceDays: string;
+    absenceDeduction: string;
+    otherDeductions: string;
+    insurance: string;
+    incomeTax: string;
+    advanceDeduction: string;
+    net: string;
+  };
+};
+
+/** "نوفمبر 2026" / "November 2026". */
+export function formatMonth(locale: Locale, month: string) {
+  const tag = locale === "ar" ? "ar-EG-u-nu-latn" : "en-GB";
+  return new Intl.DateTimeFormat(tag, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00Z`));
+}
+
+/** The pay, line by line: what is earned, what comes off (only what applies), and the net. */
+export function payslipEmail(locale: Locale, to: string, from: Sender, slip: PayslipFacts, message?: string): Mail {
+  const t = TEXT[locale];
+  const p = t.payslip;
+  const i = slip.item;
+  const money = (v: string) => formatMoney(locale, v, slip.company.currency);
+  const off = (v: string) => `− ${money(v)}`;
+  const some = (v: string) => Number(v) > 0;
+  const month = formatMonth(locale, slip.month);
+  const body = p.body(from.company, month, money(i.net));
+  const facts: [string, string][] = [
+    [p.base, money(i.baseSalary)],
+    ...(some(i.allowances) ? [[p.allowances, money(i.allowances)] as [string, string]] : []),
+    ...(some(i.bonus) ? [[p.bonus, money(i.bonus)] as [string, string]] : []),
+    ...(some(i.overtime) ? [[p.overtime, money(i.overtime)] as [string, string]] : []),
+    [p.gross, money(i.gross)],
+    ...(some(i.absenceDeduction) ? [[p.absence(i.absenceDays), off(i.absenceDeduction)] as [string, string]] : []),
+    ...(some(i.otherDeductions) ? [[p.other, off(i.otherDeductions)] as [string, string]] : []),
+    ...(some(i.insurance) ? [[p.insurance, off(i.insurance)] as [string, string]] : []),
+    ...(some(i.incomeTax) ? [[p.tax, off(i.incomeTax)] as [string, string]] : []),
+    ...(some(i.advanceDeduction) ? [[p.advance, off(i.advanceDeduction)] as [string, string]] : []),
+    [p.net, money(i.net)],
+    ...(slip.paidOn ? [[p.paidOn, formatDate(locale, slip.paidOn)] as [string, string]] : []),
+  ];
+  return {
+    to,
+    subject: p.subject(month, from.company),
+    replyTo: from.replyTo,
+    tag: "payslip",
+    ...render({
+      locale,
+      preview: body,
+      senderName: t.brand,
+      heading: p.heading(month),
+      paragraphs: message?.trim() ? [t.hello(i.name), message] : [t.hello(i.name), body],
+      facts,
       footer: t.footerCompany(from.company),
     }),
   };

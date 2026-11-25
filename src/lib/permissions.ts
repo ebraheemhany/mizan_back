@@ -28,6 +28,9 @@ const PERMISSIONS = {
   // Working on the sales pipeline (add, edit, move, lose, reopen, delete); every role
   // can see it. Deleting a won deal needs deleteData.
   deals: ["owner", "accountant", "sales"],
+  // Employees, their pay, advances, attendance and files; preparing, approving and paying
+  // the monthly payroll. Salaries are private: not for sales or viewers.
+  payroll: ["owner", "accountant"],
   settings: ["owner"],
   deleteData: ["owner"],
 } as const satisfies Record<string, readonly Role[]>;

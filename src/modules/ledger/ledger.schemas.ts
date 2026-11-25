@@ -43,7 +43,7 @@ export const entrySchema = z.object({
 export const listEntriesQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
   // payment includes cheques clearing; expense includes paying a due expense.
-  source: z.enum(["all", "invoice", "payment", "expense", "manual"]).default("all"),
+  source: z.enum(["all", "invoice", "payment", "expense", "payroll", "manual"]).default("all"),
   status: z.enum(["all", "posted", "draft"]).default("all"),
   month: month.optional(),
   page: z.coerce.number().int().min(1).default(1),
