@@ -230,10 +230,14 @@ model Invitation {
 enum AccountTokenPurpose {
   passwordReset
   emailVerification
+  // A short-lived code the browser hands to the desktop app after signing in there
+  // (Google won't sign in inside the app's embedded browser).
+  desktopSignIn
 }
 
-// A one-time link emailed to a user (reset the password, confirm the address).
-// Only the hash is stored; the token itself lives only in the email.
+// A one-time link emailed to a user (reset the password, confirm the address), or a
+// desktop sign-in code. Only the hash is stored; the token itself lives only in the
+// email (or, for a desktop code, in the mizan:// link the browser opens).
 model AccountToken {
   id        String              @id @default(uuid())
   purpose   AccountTokenPurpose

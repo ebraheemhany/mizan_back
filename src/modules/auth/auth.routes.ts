@@ -5,6 +5,7 @@ import { validateBody } from "../../middleware/validate.js";
 import {
   accountTokenSchema,
   changePasswordSchema,
+  desktopCodeSchema,
   forgotPasswordSchema,
   googleSignInSchema,
   localeSchema,
@@ -38,6 +39,16 @@ export function createAuthRouter(limit: AuthRateLimiters) {
   router.post("/google", validateBody(googleSignInSchema), limit.loginPerIp, async (req, res) => {
     const { created, ...session } = await authService.continueWithGoogle(req.body);
     res.status(created ? 201 : 200).json(session);
+  });
+
+  // Desktop app: the browser, signed in, gets a one-time code and hands it to the app
+  // (mizan://auth?code=...), which trades it for a session of its own.
+  router.post("/desktop-code", authenticate, limit.accountToken, async (req, res) => {
+    res.status(201).json(await authService.createDesktopSignInCode(req.user!.id));
+  });
+
+  router.post("/desktop-code/redeem", limit.accountToken, validateBody(desktopCodeSchema), async (req, res) => {
+    res.json(await authService.redeemDesktopSignInCode(req.body.code));
   });
 
   // No access token needed: this is what the frontend calls when the access token has expired.

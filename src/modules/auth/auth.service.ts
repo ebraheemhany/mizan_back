@@ -8,7 +8,7 @@ import { sessionUserSelect, toSessionUser, type PublicUser, type SessionUser } f
 import { issueTokens, revokeAllSessions, type TokenUser } from "./tokens.js";
 import { audit } from "../audit/audit.service.js";
 import { acceptInvitationWithGoogle } from "../invitations/invitations.service.js";
-import { sendVerificationLater } from "./account-links.service.js";
+import { claimToken, createToken, sendVerificationLater } from "./account-links.service.js";
 
 const toTokenUser = (user: PublicUser): TokenUser => ({ id: user.id, companyId: user.company.id, role: user.role });
 
@@ -174,6 +174,47 @@ export async function login(input: LoginInput) {
     prisma,
     user.company.id,
     { action: "login", event: "signedIn", item: { type: "account", ref: user.email } },
+    { id: user.id, name: user.fullName },
+  );
+  return { ...tokens, user };
+}
+
+// ---------------------------------------------------------------------------
+// Desktop app sign-in
+// ---------------------------------------------------------------------------
+// Google refuses to sign in inside the desktop app's embedded browser, so the app
+// opens the person's normal browser instead. Once signed in there, the page asks for
+// a one-time code and opens mizan://auth?code=..., and the app trades the code for a
+// session of its own. The code lives for minutes and works once.
+
+const DESKTOP_CODE_TTL_MS = 5 * 60 * 1000;
+
+const invalidDesktopCode = () =>
+  new AppError(400, "INVALID_DESKTOP_CODE", "This sign-in code is invalid, already used, or has expired");
+
+export async function createDesktopSignInCode(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, fullName: true, companyId: true },
+  });
+  if (!user) throw unauthorized();
+  const code = await createToken(prisma, user, "desktopSignIn", DESKTOP_CODE_TTL_MS);
+  return { code };
+}
+
+export async function redeemDesktopSignInCode(code: string) {
+  const claimed = await claimToken(prisma, code, "desktopSignIn");
+  if (!claimed) throw invalidDesktopCode();
+  const found = await prisma.user.findUnique({ where: { id: claimed.userId }, select: sessionUserSelect });
+  if (!found) throw invalidDesktopCode();
+
+  const user = toSessionUser(found);
+  // The app stays signed in, as with "remember me".
+  const tokens = await issueTokens(toTokenUser(user), true);
+  await audit(
+    prisma,
+    user.company.id,
+    { action: "login", event: "signedInDesktop", item: { type: "account", ref: user.email } },
     { id: user.id, name: user.fullName },
   );
   return { ...tokens, user };

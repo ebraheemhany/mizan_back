@@ -45,6 +45,9 @@ export const forgotPasswordSchema = z.object({ email, locale });
 
 export const accountTokenSchema = z.object({ token: z.string().min(1).max(200) });
 
+/** The one-time code the browser handed the desktop app (see createDesktopSignInCode). */
+export const desktopCodeSchema = z.object({ code: z.string().min(1).max(200) });
+
 export const resetPasswordSchema = accountTokenSchema.extend({ password: newPassword });
 
 export const localeSchema = z.object({ locale });

@@ -38,7 +38,7 @@ const linkUrl = (locale: Locale, page: string, token: string) =>
   new URL(`/${locale}/${page}/${token}`, config.APP_URL).toString();
 
 /** A new link. A new password link replaces the earlier ones; confirmation links all keep working. */
-async function createToken(db: Db, user: Account, purpose: AccountTokenPurpose, ttlMs: number) {
+export async function createToken(db: Db, user: Account, purpose: AccountTokenPurpose, ttlMs: number) {
   // Housekeeping: links long past their date go.
   await db.accountToken.deleteMany({
     where: { userId: user.id, expiresAt: { lt: new Date(Date.now() - 7 * DAY_MS) } },
@@ -54,7 +54,7 @@ async function createToken(db: Db, user: Account, purpose: AccountTokenPurpose, 
 }
 
 /** Uses a link up: once only, and only before it expires (two clicks at once: one wins). */
-async function claimToken(db: Db, token: string, purpose: AccountTokenPurpose) {
+export async function claimToken(db: Db, token: string, purpose: AccountTokenPurpose) {
   const tokenHash = hashToken(token);
   const { count } = await db.accountToken.updateMany({
     where: { tokenHash, purpose, usedAt: null, expiresAt: { gt: new Date() } },
