@@ -9,7 +9,8 @@ export const publicUserSelect = {
   createdAt: true,
   // null until the user opens the link emailed to them.
   emailVerifiedAt: true,
-  company: { select: { id: true, name: true } },
+  // The currency: the app shows every amount in it.
+  company: { select: { id: true, name: true, currency: true } },
 } satisfies Prisma.UserSelect;
 
 export type PublicUser = Prisma.UserGetPayload<{ select: typeof publicUserSelect }>;

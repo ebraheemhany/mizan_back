@@ -68,6 +68,14 @@ describe("PATCH /api/settings", () => {
     expect(res.body.settings.company).toEqual(savedSettings.company);
   });
 
+  it("the session carries the company's currency, so the app shows amounts in it", async () => {
+    const owner = await ownerSession();
+    const me = async () => (await api().get("/api/auth/me").set(auth(owner.token))).body.user.company;
+    expect((await me()).currency).toBe("EGP");
+    await patch(owner.token, { taxes: { ...fullSettings.taxes, currency: "SAR" } });
+    expect(await me()).toMatchObject({ currency: "SAR" });
+  });
+
   it("empty optional fields are cleared", async () => {
     const owner = await ownerSession();
     await patch(owner.token, fullSettings);
