@@ -11,16 +11,14 @@ import type { Locale, Sender } from "./templates.js";
 export async function customerMailSender(actor: { id: string; companyId: string }): Promise<Sender> {
   const user = await prisma.user.findFirst({
     where: { id: actor.id, companyId: actor.companyId },
-    select: { email: true, emailVerifiedAt: true, company: { select: { name: true, logoFileId: true } } },
+    select: { email: true, emailVerifiedAt: true, company: { select: { name: true } } },
   });
   if (!user) throw unauthorized();
   if (!user.emailVerifiedAt) {
     throw new AppError(403, "EMAIL_NOT_VERIFIED", "Confirm your email address before emailing customers");
   }
-  const { logoFileId } = user.company;
   return {
     company: user.company.name,
-    logoUrl: logoFileId ? new URL(`/api/public/logos/${logoFileId}`, config.API_URL).toString() : null,
     replyTo: user.email,
   };
 }

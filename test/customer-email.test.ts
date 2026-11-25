@@ -44,6 +44,8 @@ describe("emailing an invoice", () => {
     // The inbox shows Mizan (MAIL_FROM's name) as the sender; the subject names the company.
     expect(mail!.fromName).toBeUndefined();
     expect(mail!.subject).toBe(`فاتورة INV-${invoice.number} من شركة ميزان`);
+    // Mizan heads the email; the company is named in the text.
+    expect(mail!.html).toContain(">ميزان</p>");
     const { publicToken } = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
     expect(mail!.text).toContain(`http://localhost:3000/ar/i/${publicToken}`);
     // 1000 + 14% VAT.
@@ -55,7 +57,7 @@ describe("emailing an invoice", () => {
     expect(log.body.items[0]).toMatchObject({ event: "invoiceEmailed", values: { to: "billing@nile.example" } });
   });
 
-  it("another address, an own message (escaped), English, and the company logo", async () => {
+  it("another address, an own message (escaped), English; Mizan at the top, not the company logo", async () => {
     const owner = await verifiedOwner();
     const customer = await customerOf(owner.token);
     const invoice = await invoiceFor(owner.token, customer.id);
@@ -73,7 +75,8 @@ describe("emailing an invoice", () => {
     expect(mail!.text).toContain("/en/i/");
     expect(mail!.html).toContain("&lt;b&gt;please&lt;/b&gt;");
     expect(mail!.html).not.toContain("Hello");
-    expect(mail!.html).toContain(`http://localhost:4000/api/public/logos/${logo.body.logoId}`);
+    expect(mail!.html).not.toContain(`/api/public/logos/${logo.body.logoId}`);
+    expect(mail!.html).toContain(">Mizan</p>");
   });
 
   it("refused: unconfirmed sender, a draft, no address, viewers; a failed send records nothing", async () => {

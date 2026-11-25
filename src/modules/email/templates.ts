@@ -37,8 +37,7 @@ type Content = {
   locale: Locale;
   /** The line inbox lists show after the subject. */
   preview: string;
-  /** The sender's logo; their name is shown instead when there is none. */
-  logoUrl?: string | null;
+  /** Shown at the top: Mizan, on every email. */
   senderName: string;
   heading: string;
   /** Plain text; blank lines start a new paragraph. */
@@ -64,9 +63,7 @@ function render(c: Content): Pick<Mail, "html" | "text"> {
       .map((p) => `<p style="margin:0 0 14px">${esc(p).replace(/\n/g, "<br>")}</p>`)
       .join("");
 
-  const brand = c.logoUrl
-    ? `<img src="${esc(c.logoUrl)}" alt="${esc(c.senderName)}" height="48" style="display:block;height:48px;max-width:180px;border:0">`
-    : `<p style="margin:0;font-size:18px;font-weight:bold;color:${BRAND}">${esc(c.senderName)}</p>`;
+  const brand = `<p style="margin:0;font-size:18px;font-weight:bold;color:${BRAND}">${esc(c.senderName)}</p>`;
 
   const facts = c.facts?.length
     ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:6px 0 18px;background:#f6f8f7;border-radius:12px">${c.facts
@@ -327,7 +324,6 @@ export function invitationEmail(
 
 export type Sender = {
   company: string;
-  logoUrl: string | null;
   /** The user sending it: replies go to them. */
   replyTo: string;
 };
@@ -369,8 +365,7 @@ export function invoiceEmail(locale: Locale, to: string, from: Sender, inv: Invo
     ...render({
       locale,
       preview: body,
-      logoUrl: from.logoUrl,
-      senderName: from.company,
+      senderName: t.brand,
       heading: t.invoice.heading(inv.number),
       paragraphs: message?.trim() ? [message] : [t.hello(inv.customer), body],
       facts: invoiceFacts(locale, inv),
@@ -393,8 +388,7 @@ export function reminderEmail(locale: Locale, to: string, from: Sender, inv: Inv
     ...render({
       locale,
       preview: paragraphs.join(" ").slice(0, 140),
-      logoUrl: from.logoUrl,
-      senderName: from.company,
+      senderName: t.brand,
       heading: t.reminder.heading(inv.number),
       paragraphs,
       facts: invoiceFacts(locale, inv),
@@ -423,8 +417,7 @@ export function quoteEmail(
     ...render({
       locale,
       preview: body,
-      logoUrl: from.logoUrl,
-      senderName: from.company,
+      senderName: t.brand,
       heading: t.quote.heading(quote.number),
       paragraphs: message?.trim() ? [message] : [t.hello(quote.customer), body],
       facts: [
