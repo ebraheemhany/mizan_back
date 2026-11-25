@@ -11,6 +11,7 @@ import {
   reminderSchema,
 } from "./invoices.schemas.js";
 import * as invoices from "./invoices.service.js";
+import { publicPaymentOptions } from "../collections/collections.service.js";
 
 export function createInvoicesRouter(limit: AuthRateLimiters) {
   const router = Router();
@@ -58,7 +59,9 @@ export function createInvoicesRouter(limit: AuthRateLimiters) {
 
   router.post("/:ref/payments", pay, validateBody(recordPaymentSchema), async (req, res) => {
     const ref = invoices.parseInvoiceRef(req.params.ref);
-    res.status(201).json({ invoice: await invoices.recordPayment(req.user!, ref, req.body) });
+    // The new payment's id too, so its proof can be uploaded right after.
+    const paymentId = await invoices.applyPayment(req.user!, ref, req.body);
+    res.status(201).json({ invoice: await invoices.getInvoice(req.user!.companyId, ref), paymentId });
   });
 
   router.post("/:ref/email", issue, limit.customerEmail, validateBody(emailInvoiceSchema), async (req, res) => {
@@ -74,7 +77,10 @@ export function createInvoicesRouter(limit: AuthRateLimiters) {
   return router;
 }
 
-/** GET /api/public/invoices/:token — the shareable invoice link, no login. */
+/**
+ * GET /api/public/invoices/:token — the shareable invoice link, no login, with how the
+ * customer can pay it (transfer details, card payment, receipts they already sent).
+ */
 export function createPublicInvoicesRouter() {
   const router = Router();
   router.get("/:token", async (req, res) => {
@@ -83,7 +89,8 @@ export function createPublicInvoicesRouter() {
       res.status(404).json({ error: { code: "NOT_FOUND", message: "Invoice not found" } });
       return;
     }
-    res.json({ invoice: await invoices.getPublicInvoice(token) });
+    const invoice = await invoices.getPublicInvoice(token);
+    res.json({ invoice, pay: await publicPaymentOptions(token) });
   });
   return router;
 }

@@ -295,6 +295,8 @@ export async function removePayment(actor: Actor, id: string) {
         status: true,
         invoiceId: true,
         invoice: { select: { customerId: true, number: true, numberPrefix: true, customerName: true } },
+        proofFileId: true,
+        claim: { select: { id: true } },
       },
     });
     if (!payment) throw notFound("Payment");
@@ -318,6 +320,17 @@ export async function removePayment(actor: Actor, id: string) {
     if (updated === 0) throw new AppError(409, "PAYMENT_NOT_REMOVABLE", "This payment can't be removed");
 
     await tx.invoicePayment.delete({ where: { id: payment.id } });
+    if (payment.claim) {
+      // It came from a customer's receipt: the receipt goes back to waiting for review
+      // (it keeps its file), rather than saying "accepted" with no payment behind it.
+      await tx.paymentClaim.update({
+        where: { id: payment.claim.id },
+        data: { status: "pending", reviewedAt: null, reviewedById: null },
+      });
+    } else if (payment.proofFileId) {
+      // A proof staff uploaded belongs to this payment only.
+      await tx.storedFile.deleteMany({ where: { id: payment.proofFileId, companyId: actor.companyId } });
+    }
     await tx.invoiceEvent.create({
       data: {
         invoiceId: payment.invoiceId,

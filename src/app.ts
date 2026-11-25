@@ -26,6 +26,12 @@ import { createBillingRouter, createPaymobWebhookRouter, createTestCheckoutRoute
 import { requestContext } from "./lib/request-context.js";
 import { createDirectoryRouter } from "./modules/users/directory.routes.js";
 import { createInvitationsRouter } from "./modules/invitations/invitations.routes.js";
+import {
+  createInvoicePaymobWebhookRouter,
+  createPaymentClaimsRouter,
+  createPaymentSetupRouter,
+  createPublicPaymentRouter,
+} from "./modules/collections/collections.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
 
 type AppOptions = {
@@ -62,6 +68,10 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/settings", createSettingsRouter());
   app.use("/api/invoices", createInvoicesRouter(limiters));
   app.use("/api/public/invoices", createPublicInvoicesRouter());
+  // Paying on the invoice link: receipts for transfers, and card payments.
+  app.use("/api/public/invoices", createPublicPaymentRouter(limiters));
+  app.use("/api/payment-setup", createPaymentSetupRouter());
+  app.use("/api/payment-claims", createPaymentClaimsRouter());
   app.use("/api/payments", createPaymentsRouter());
   app.use("/api/dashboard", createDashboardRouter());
   app.use("/api/expenses", createExpensesRouter());
@@ -75,6 +85,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   // The test checkout before the billing router (that one needs a login).
   app.use("/api/billing/test-checkout", createTestCheckoutRouter());
   app.use("/api/billing", createBillingRouter());
+  // Callbacks for companies' own Paymob accounts (their customers paying invoices).
+  app.use("/api/public/paymob/invoices", createInvoicePaymobWebhookRouter());
   app.use("/api/public/paymob", createPaymobWebhookRouter());
   app.use("/api/quotes", createQuotesRouter(limiters));
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));

@@ -69,6 +69,9 @@ model Company {
   ledgerAccounts  LedgerAccount[]
   subscription    Subscription?
   billingPayments BillingPayment[]
+  paymentSetup    PaymentSetup?
+  paymentClaims   PaymentClaim[]
+  onlinePayments  OnlinePayment[]
   auditEvents     AuditEvent[]
   deals           Deal[]
   files           StoredFile[]       @relation("CompanyFiles")
@@ -151,6 +154,7 @@ model User {
   createdDeals      Deal[]             @relation("DealCreator")
   billingPayments   BillingPayment[]
   accountTokens     AccountToken[]
+  reviewedClaims    PaymentClaim[]
 
   @@index([companyId])
   @@map("users")
@@ -339,6 +343,9 @@ enum InvoiceEventType {
   paymentRemoved
   chequeBounced
   cancelled
+  // The customer sent a receipt on the invoice link (waits for review).
+  paymentClaimed
+  paymentClaimRejected
 }
 
 // "overdue" is not a stored status: a sent/partial invoice whose due date has
@@ -387,11 +394,13 @@ model Invoice {
   createdById String?
   createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
-  lines    InvoiceLine[]
-  payments InvoicePayment[]
-  events   InvoiceEvent[]
+  lines          InvoiceLine[]
+  payments       InvoicePayment[]
+  events         InvoiceEvent[]
+  paymentClaims  PaymentClaim[]
+  onlinePayments OnlinePayment[]
   // The accepted quote this invoice was made from, if any.
-  quote    Quote?
+  quote          Quote?
 
   // Made by a recurring template: which one, and for which scheduled date. One
   // invoice per template and date (the unique key makes a repeated run harmless).
@@ -448,6 +457,15 @@ model InvoicePayment {
   invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  // Proof of the payment (a receipt or transfer screenshot): uploaded by staff, or the
+  // customer's own receipt when the payment came from their claim.
+  proofFileId String?     @unique
+  proof       StoredFile? @relation("PaymentProof", fields: [proofFileId], references: [id], onDelete: SetNull)
+
+  // Where it came from, if not typed in by staff.
+  claim         PaymentClaim?
+  onlinePayment OnlinePayment?
 
   @@unique([companyId, number])
   @@index([invoiceId])
@@ -998,8 +1016,10 @@ model StoredFile {
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
-  logoOf    Company? @relation("CompanyLogo")
-  receiptOf Expense?
+  logoOf         Company?        @relation("CompanyLogo")
+  receiptOf      Expense?
+  claimReceiptOf PaymentClaim?   @relation("ClaimReceipt")
+  proofOf        InvoicePayment? @relation("PaymentProof")
 
   @@index([companyId])
   @@map("files")
@@ -1110,4 +1130,112 @@ model BillingPayment {
   @@index([companyId, createdAt])
   @@index([status, createdAt])
   @@map("billing_payments")
+}
+
+// ---------------------------------------------------------------------------
+// Collecting invoice payments from customers (on the invoice link)
+// ---------------------------------------------------------------------------
+
+// How a company's customers can pay it: the transfer details shown on the invoice
+// link, and the company's own Paymob account for card payments there (the money goes
+// straight to the company; Mizan never holds it).
+model PaymentSetup {
+  companyId String  @id
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Shown to customers. Empty: not offered.
+  bankName        String?
+  accountName     String?
+  // Account number or IBAN.
+  accountNumber   String?
+  // InstaPay address (name@instapay) or its phone number.
+  instapayAddress String?
+  // Mobile wallet number (Vodafone Cash, Orange Cash...).
+  walletNumber    String?
+  instructions    String?
+
+  // The company's Paymob account. The secret key and the HMAC secret are stored
+  // encrypted (lib/secret-box); all four are set together or all are null.
+  paymobSecretKey     String?
+  paymobPublicKey     String?
+  paymobHmacSecret    String?
+  paymobIntegrationId Int?
+  // Live keys (egy_sk_live_) or test keys.
+  paymobLive          Boolean   @default(false)
+  paymobConnectedAt   DateTime? @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("payment_setups")
+}
+
+enum PaymentClaimStatus {
+  pending
+  accepted
+  rejected
+}
+
+// A customer saying "I've paid" on the invoice link, with the receipt. It changes
+// nothing until someone who records payments accepts it (it then becomes a payment).
+model PaymentClaim {
+  id           String             @id @default(uuid())
+  amount       Decimal            @db.Decimal(14, 2)
+  // When the customer says they paid.
+  date         DateTime           @db.Date
+  // bank, instapay or vodafoneCash.
+  method       PaymentMethod
+  reference    String?
+  payerName    String?
+  note         String?
+  status       PaymentClaimStatus @default(pending)
+  rejectReason String?
+  reviewedAt   DateTime?          @db.Timestamptz(3)
+  createdAt    DateTime           @default(now()) @db.Timestamptz(3)
+
+  companyId     String
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoiceId     String
+  invoice       Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  receiptFileId String          @unique
+  receipt       StoredFile      @relation("ClaimReceipt", fields: [receiptFileId], references: [id], onDelete: Cascade)
+  reviewedById  String?
+  reviewedBy    User?           @relation(fields: [reviewedById], references: [id], onDelete: SetNull)
+  // The payment it became, once accepted.
+  paymentId     String?         @unique
+  payment       InvoicePayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([invoiceId])
+  @@map("payment_claims")
+}
+
+enum OnlinePaymentStatus {
+  pending
+  paid
+  failed
+}
+
+// A card payment a customer started on the invoice link, through the company's own
+// Paymob account. Paymob's callback settles it; a paid one records the payment.
+model OnlinePayment {
+  id             String              @id @default(uuid())
+  amount         Decimal             @db.Decimal(14, 2)
+  status         OnlinePaymentStatus @default(pending)
+  // Paymob's order id: the callback is matched by it (the HMAC covers it).
+  gatewayOrderId String
+  transactionId  String?
+  failureReason  String?
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+  settledAt      DateTime?           @db.Timestamptz(3)
+
+  companyId String
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoiceId String
+  invoice   Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  paymentId String?         @unique
+  payment   InvoicePayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, gatewayOrderId])
+  @@index([invoiceId])
+  @@map("online_payments")
 }

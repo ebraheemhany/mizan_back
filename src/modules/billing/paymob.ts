@@ -95,16 +95,10 @@ type Intention = {
   payment_keys?: { integration: number; key: string }[];
 };
 
-/** POST /v1/intention/: the payment to make, with which integration (card or MOTO). */
-function createIntention(integrationId: number, request: PaymentRequest, returnUrl?: string) {
+/** The body of POST /v1/intention/: the payment to make, with which integration. */
+function intentionBody(integrationId: number, request: PaymentRequest, urls: { notification: string; redirection?: string | undefined }) {
   const { payer } = request;
-  return call<Intention>("/v1/intention/", {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${config.PAYMOB_SECRET_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  return JSON.stringify({
       amount: request.amountCents,
       currency: "EGP",
       payment_methods: [integrationId],
@@ -132,10 +126,70 @@ function createIntention(integrationId: number, request: PaymentRequest, returnU
       special_reference: request.reference,
       // The checkout page works for an hour.
       expiration: 3600,
-      notification_url: new URL("/api/public/paymob/webhook", config.API_URL).toString(),
-      ...(returnUrl ? { redirection_url: returnUrl } : {}),
+      notification_url: urls.notification,
+      ...(urls.redirection ? { redirection_url: urls.redirection } : {}),
+  });
+}
+
+/** POST /v1/intention/ on Mizan's own account (subscriptions): card checkout or MOTO renewal. */
+function createIntention(integrationId: number, request: PaymentRequest, returnUrl?: string) {
+  return call<Intention>("/v1/intention/", {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${config.PAYMOB_SECRET_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: intentionBody(integrationId, request, {
+      notification: new URL("/api/public/paymob/webhook", config.API_URL).toString(),
+      redirection: returnUrl,
     }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// A company's own Paymob account (its customers paying its invoices)
+// ---------------------------------------------------------------------------
+
+export type PaymobAccount = { secretKey: string; publicKey: string; hmacSecret: string; integrationId: number };
+
+const accountError = (code: string, message: string) => new AppError(400, code, message);
+
+/**
+ * A card checkout on the company's own account: the money goes to the company.
+ * Errors say what is wrong with the account, so they can be shown when connecting it.
+ */
+export async function createAccountCheckout(
+  account: Omit<PaymobAccount, "hmacSecret">,
+  request: PaymentRequest & { returnUrl?: string; notificationUrl: string },
+) {
+  let res: Response;
+  try {
+    res = await fetch(new URL("/v1/intention/", config.PAYMOB_API_URL), {
+      method: "POST",
+      headers: { Authorization: `Token ${account.secretKey}`, "Content-Type": "application/json" },
+      body: intentionBody(account.integrationId, request, { notification: request.notificationUrl, redirection: request.returnUrl }),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (err) {
+    logger.error({ err }, "Could not reach Paymob");
+    throw gatewayError();
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    logger.warn({ status: res.status, body: text.slice(0, 500) }, "Paymob refused a company's checkout");
+    if (res.status === 401 || res.status === 403) {
+      throw accountError("PAYMOB_SECRET_INVALID", "Paymob didn't accept the secret key");
+    }
+    if (/integration/i.test(text)) {
+      throw accountError("PAYMOB_INTEGRATION_INVALID", "Paymob doesn't know this integration ID for this account");
+    }
+    throw accountError("PAYMOB_REFUSED", "Paymob refused the payment request");
+  }
+  const intention = JSON.parse(text) as Intention;
+  const url = new URL(config.PAYMOB_CHECKOUT_URL);
+  url.searchParams.set("publicKey", account.publicKey);
+  url.searchParams.set("clientSecret", intention.client_secret);
+  return { url: url.toString(), orderId: String(intention.intention_order_id) };
 }
 
 type PayResponse = {
@@ -269,9 +323,23 @@ export function callbackHmac(type: CallbackType, obj: unknown, secret = config.P
 }
 
 /** Whether a callback really comes from Paymob (the hmac arrives in the query string). */
-export function verifyCallback(type: CallbackType, obj: unknown, hmac: unknown) {
-  if (!config.PAYMOB_HMAC_SECRET || typeof hmac !== "string" || !obj || typeof obj !== "object") return false;
-  const expected = Buffer.from(callbackHmac(type, obj), "utf8");
+export function verifyCallback(type: CallbackType, obj: unknown, hmac: unknown, secret = config.PAYMOB_HMAC_SECRET) {
+  if (!secret || typeof hmac !== "string" || !obj || typeof obj !== "object") return false;
+  const expected = Buffer.from(callbackHmac(type, obj, secret), "utf8");
   const given = Buffer.from(hmac.toLowerCase(), "utf8");
   return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
+/** What a TRANSACTION callback says, read the same way for every account. */
+export function readTransaction(obj: Record<string, unknown>) {
+  const order = (obj["order"] ?? {}) as { id?: unknown };
+  const data = (obj["data"] ?? {}) as { message?: unknown };
+  return {
+    // A pending answer is followed by another callback.
+    final: obj["pending"] !== true,
+    orderId: order.id === undefined || order.id === null ? null : String(order.id),
+    paid: obj["success"] === true && obj["is_voided"] !== true && obj["is_refunded"] !== true && obj["error_occured"] !== true,
+    transactionId: obj["id"] === undefined || obj["id"] === null ? undefined : String(obj["id"]),
+    reason: typeof data.message === "string" ? data.message : undefined,
+  };
 }

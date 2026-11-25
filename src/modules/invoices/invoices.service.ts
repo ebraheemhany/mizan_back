@@ -25,6 +25,8 @@ export const VAT_RATE = 14;
 const EXPORT_LIMIT = 5000;
 
 type Actor = { id: string; companyId: string };
+/** Who records a payment: a user, or nobody (id null) when Paymob's callback records it. */
+type PaymentActor = { id: string | null; companyId: string };
 type Tx = Prisma.TransactionClient;
 
 // ---------------------------------------------------------------------------
@@ -132,11 +134,33 @@ const detailSelect = {
       account: true,
       reference: true,
       note: true,
+      proofFileId: true,
+      claim: { select: { id: true } },
+      onlinePayment: { select: { id: true } },
     },
   },
   events: {
     orderBy: { createdAt: "desc" },
     select: { id: true, type: true, values: true, createdAt: true },
+  },
+  // Receipts customers sent on the link that wait for review, and recent refusals.
+  paymentClaims: {
+    where: { status: { in: ["pending", "rejected"] } },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      amount: true,
+      date: true,
+      method: true,
+      reference: true,
+      payerName: true,
+      note: true,
+      status: true,
+      rejectReason: true,
+      createdAt: true,
+      receipt: { select: { contentType: true, name: true } },
+    },
   },
   company: {
     select: {
@@ -202,6 +226,9 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
       account: p.account,
       reference: p.reference,
       note: p.note,
+      hasProof: p.proofFileId !== null,
+      // Typed in by staff (null), accepted from a customer's receipt, or paid online.
+      source: p.claim ? ("claim" as const) : p.onlinePayment ? ("online" as const) : null,
     })),
     sentAt: row.sentAt,
     cancelledAt: row.cancelledAt,
@@ -214,6 +241,19 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
           // The recurring template that made it, if any.
           recurring: row.recurring,
           history: row.events.map((e) => ({ id: e.id, type: e.type, at: e.createdAt.toISOString(), values: e.values })),
+          claims: row.paymentClaims.map((c) => ({
+            id: c.id,
+            amount: moneyString(c.amount),
+            date: toIso(c.date),
+            method: c.method,
+            reference: c.reference,
+            payerName: c.payerName,
+            note: c.note,
+            status: c.status,
+            rejectReason: c.rejectReason,
+            createdAt: c.createdAt.toISOString(),
+            receipt: { contentType: c.receipt.contentType, name: c.receipt.name },
+          })),
         }),
   };
 }
@@ -587,105 +627,106 @@ export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
 /** Receipt number as shown: PAY-0001. */
 export const paymentNumber = (n: number) => `PAY-${String(n).padStart(4, "0")}`;
 
-export async function recordPayment(actor: Actor, ref: InvoiceRef, input: RecordPaymentInput) {
-  await applyPayment(actor, ref, input);
-  return getInvoice(actor.companyId, ref);
-}
-
 /**
  * Records a payment on an invoice and returns the new payment's id.
  * Also used by the payments page (POST /api/payments).
  */
-export async function applyPayment(actor: Actor, ref: InvoiceRef, input: RecordPaymentInput) {
+export async function applyPayment(actor: PaymentActor, ref: InvoiceRef, input: RecordPaymentInput) {
+  return prisma.$transaction((tx) => applyPaymentTx(tx, actor, ref, input));
+}
+
+/**
+ * The same, inside a transaction the caller holds (accepting a customer's receipt
+ * records the payment and closes the claim together). It locks the company row
+ * first, like every other write that numbers things.
+ */
+export async function applyPaymentTx(tx: Tx, actor: PaymentActor, ref: InvoiceRef, input: RecordPaymentInput) {
   const amount = money(input.amount);
   const today = businessToday();
-
-  return prisma.$transaction(async (tx) => {
-    // Receipt number, taken the same way as invoice numbers (the update locks the
-    // company row first: same lock order as everywhere else, and the closing date
-    // read here can't change before this payment is saved).
-    const company = await tx.company.update({
-      where: { id: actor.companyId },
-      data: { paymentNextNumber: { increment: 1 } },
-      select: { paymentNextNumber: true, booksClosedThrough: true },
-    });
-    const row = await findRow(tx, actor.companyId, ref, {
-      id: true,
-      status: true,
-      issueDate: true,
-      customerId: true,
-      number: true,
-      numberPrefix: true,
-      customerName: true,
-    });
-    if (!OPEN.includes(row.status)) {
-      throw new AppError(409, "INVOICE_NOT_PAYABLE", "Payments can only be recorded on a sent, unpaid invoice");
-    }
-    if (input.date > today) {
-      throw new AppError(400, "PAYMENT_DATE_IN_FUTURE", "The payment date can't be in the future", { field: "date" });
-    }
-    if (input.date < toIso(row.issueDate)) {
-      throw new AppError(400, "PAYMENT_BEFORE_ISSUE", "The payment date can't be before the invoice date", { field: "date" });
-    }
-    checkBooksOpen(company.booksClosedThrough, [input.date]);
-
-    // One statement adds the payment only if it fits in what is still owed.
-    // Two payments recorded at the same moment can't together pay more than the total.
-    const updated = await tx.$executeRaw`
-      UPDATE "invoices"
-      SET "amountPaid" = "amountPaid" + ${amount}::numeric,
-          "status" = (CASE WHEN "amountPaid" + ${amount}::numeric = "total" THEN 'paid' ELSE 'partial' END)::"InvoiceStatus",
-          "updatedAt" = now()
-      WHERE "id" = ${row.id}
-        AND "status" IN ('sent', 'partial')
-        AND "amountPaid" + ${amount}::numeric <= "total"`;
-    if (updated === 0) {
-      throw new AppError(400, "PAYMENT_EXCEEDS_BALANCE", "The payment is more than what is still owed", { field: "amount" });
-    }
-
-    // A cheque lowers what is owed straight away but only counts as collected once it clears.
-    const pending = input.method === "cheque";
-
-    const payment = await tx.invoicePayment.create({
-      data: {
-        number: company.paymentNextNumber - 1,
-        invoiceId: row.id,
-        companyId: actor.companyId,
-        amount,
-        date: toDate(input.date),
-        method: input.method,
-        status: pending ? "pending" : "cleared",
-        clearedAt: pending ? null : new Date(),
-        account: input.account ?? null,
-        reference: input.reference ?? null,
-        note: input.note ?? null,
-        createdById: actor.id,
-      },
-      select: { id: true, number: true },
-    });
-    await tx.invoiceEvent.create({
-      data: {
-        invoiceId: row.id,
-        type: "payment",
-        values: { amount: moneyString(amount), payment: paymentNumber(payment.number) },
-        userId: actor.id,
-      },
-    });
-    await moveCustomerBalance(tx, row.customerId, amount.negated());
-    await audit(tx, actor.companyId, {
-      action: "payment",
-      event: "paymentRecorded",
-      item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
-      values: {
-        number: row.number,
-        amount: moneyString(amount),
-        payment: paymentNumber(payment.number),
-        method: input.method,
-        customer: row.customerName,
-      },
-    });
-    return payment.id;
+  // Receipt number, taken the same way as invoice numbers (the update locks the
+  // company row first: same lock order as everywhere else, and the closing date
+  // read here can't change before this payment is saved).
+  const company = await tx.company.update({
+    where: { id: actor.companyId },
+    data: { paymentNextNumber: { increment: 1 } },
+    select: { paymentNextNumber: true, booksClosedThrough: true },
   });
+  const row = await findRow(tx, actor.companyId, ref, {
+    id: true,
+    status: true,
+    issueDate: true,
+    customerId: true,
+    number: true,
+    numberPrefix: true,
+    customerName: true,
+  });
+  if (!OPEN.includes(row.status)) {
+    throw new AppError(409, "INVOICE_NOT_PAYABLE", "Payments can only be recorded on a sent, unpaid invoice");
+  }
+  if (input.date > today) {
+    throw new AppError(400, "PAYMENT_DATE_IN_FUTURE", "The payment date can't be in the future", { field: "date" });
+  }
+  if (input.date < toIso(row.issueDate)) {
+    throw new AppError(400, "PAYMENT_BEFORE_ISSUE", "The payment date can't be before the invoice date", { field: "date" });
+  }
+  checkBooksOpen(company.booksClosedThrough, [input.date]);
+
+  // One statement adds the payment only if it fits in what is still owed.
+  // Two payments recorded at the same moment can't together pay more than the total.
+  const updated = await tx.$executeRaw`
+    UPDATE "invoices"
+    SET "amountPaid" = "amountPaid" + ${amount}::numeric,
+        "status" = (CASE WHEN "amountPaid" + ${amount}::numeric = "total" THEN 'paid' ELSE 'partial' END)::"InvoiceStatus",
+        "updatedAt" = now()
+    WHERE "id" = ${row.id}
+      AND "status" IN ('sent', 'partial')
+      AND "amountPaid" + ${amount}::numeric <= "total"`;
+  if (updated === 0) {
+    throw new AppError(400, "PAYMENT_EXCEEDS_BALANCE", "The payment is more than what is still owed", { field: "amount" });
+  }
+
+  // A cheque lowers what is owed straight away but only counts as collected once it clears.
+  const pending = input.method === "cheque";
+
+  const payment = await tx.invoicePayment.create({
+    data: {
+      number: company.paymentNextNumber - 1,
+      invoiceId: row.id,
+      companyId: actor.companyId,
+      amount,
+      date: toDate(input.date),
+      method: input.method,
+      status: pending ? "pending" : "cleared",
+      clearedAt: pending ? null : new Date(),
+      account: input.account ?? null,
+      reference: input.reference ?? null,
+      note: input.note ?? null,
+      createdById: actor.id,
+    },
+    select: { id: true, number: true },
+  });
+  await tx.invoiceEvent.create({
+    data: {
+      invoiceId: row.id,
+      type: "payment",
+      values: { amount: moneyString(amount), payment: paymentNumber(payment.number) },
+      userId: actor.id,
+    },
+  });
+  await moveCustomerBalance(tx, row.customerId, amount.negated());
+  await audit(tx, actor.companyId, {
+    action: "payment",
+    event: "paymentRecorded",
+    item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+    values: {
+      number: row.number,
+      amount: moneyString(amount),
+      payment: paymentNumber(payment.number),
+      method: input.method,
+      customer: row.customerName,
+    },
+  });
+  return payment.id;
 }
 
 // ---------------------------------------------------------------------------

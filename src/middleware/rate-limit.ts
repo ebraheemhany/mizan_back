@@ -61,6 +61,8 @@ export type AuthRateLimiters = {
   resendVerification: RequestHandler;
   /** Emails to customers (invoices, quotes, reminders), per user. Must run after `authenticate`. */
   customerEmail: RequestHandler;
+  /** Receipts sent and card payments started on public invoice links, from one IP. */
+  publicPayment: RequestHandler;
 };
 
 /**
@@ -82,6 +84,7 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       accountToken: passThrough,
       resendVerification: passThrough,
       customerEmail: passThrough,
+      publicPayment: passThrough,
     };
   }
 
@@ -153,6 +156,12 @@ export function createAuthRateLimiters(enabled = true): AuthRateLimiters {
       limit: 60,
       onlyFailures: false,
       key: (req) => `customer-email:${req.user?.id ?? clientIp(req)}`,
+    }),
+    publicPayment: createLimiter({
+      windowMs: 15 * MINUTE,
+      limit: 20,
+      onlyFailures: false,
+      key: (req) => `public-payment:${clientIp(req)}`,
     }),
   };
 }

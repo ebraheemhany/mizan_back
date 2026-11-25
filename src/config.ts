@@ -37,6 +37,13 @@ const envSchema = z.object({
   GMAIL_CLIENT_SECRET: optionalText,
   GMAIL_REFRESH_TOKEN: optionalText,
   GMAIL_SENDER: z.preprocess((value) => (typeof value === "string" && value.trim() === "" ? undefined : value), z.email().optional()),
+  // Encrypts secrets companies give us (their Paymob keys). 32 random bytes, base64:
+  // `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+  // Required in production to save them; changing it makes saved ones unreadable.
+  ENCRYPTION_KEY: optionalText.refine(
+    (value) => value === undefined || Buffer.from(value, "base64").length === 32,
+    "ENCRYPTION_KEY must be 32 bytes, base64",
+  ),
   // "Sign in with Google": the Web application OAuth client's id (not secret; the same
   // value as the frontend's NEXT_PUBLIC_GOOGLE_CLIENT_ID). Empty: the option is off.
   GOOGLE_CLIENT_ID: optionalText,

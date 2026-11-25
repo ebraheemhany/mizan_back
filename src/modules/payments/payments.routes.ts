@@ -4,6 +4,9 @@ import { authenticate, requirePermission } from "../../middleware/auth.js";
 import { parseQuery, validateBody } from "../../middleware/validate.js";
 import { createPaymentSchema, listPaymentsQuerySchema } from "./payments.schemas.js";
 import * as payments from "./payments.service.js";
+import { attachPaymentProof, getPaymentProof } from "../collections/collections.service.js";
+import { fileName } from "../files/files.service.js";
+import { rawUpload, sendFile } from "../files/files.routes.js";
 
 export function createPaymentsRouter() {
   const router = Router();
@@ -46,6 +49,16 @@ export function createPaymentsRouter() {
   router.delete("/:id", record, async (req, res) => {
     await payments.removePayment(req.user!, parseId(req.params.id, "Payment"));
     res.status(204).end();
+  });
+
+  // Proof of a payment (a receipt or transfer screenshot): the file is the body.
+  router.put("/:id/proof", record, rawUpload, async (req, res) => {
+    const id = parseId(req.params.id, "Payment");
+    res.json(await attachPaymentProof(req.user!, id, req.body, fileName(req.get("x-file-name"))));
+  });
+
+  router.get("/:id/proof", async (req, res) => {
+    sendFile(res, await getPaymentProof(req.user!.companyId, parseId(req.params.id, "Payment")));
   });
 
   return router;
