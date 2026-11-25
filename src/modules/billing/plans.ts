@@ -30,7 +30,7 @@ export const PLANS: Record<PlanId, Plan> = {
   },
   pro: {
     id: "pro",
-    price: 1200,
+    price: 299,
     users: 10,
     invoicesPerMonth: null,
     recurring: true,
@@ -38,7 +38,7 @@ export const PLANS: Record<PlanId, Plan> = {
   },
   business: {
     id: "business",
-    price: 2500,
+    price: 799,
     users: 50,
     invoicesPerMonth: null,
     recurring: true,

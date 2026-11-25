@@ -105,12 +105,12 @@ describe("subscribing", () => {
     const owner = await ownerSession({ plan: "free" });
     const checkout = await api().post("/api/billing/checkout").set(auth(owner.token)).send({ plan: "pro", locale: "en" });
     expect(checkout.status).toBe(201);
-    expect(checkout.body).toMatchObject({ amount: "1200.00", kind: "subscribe" });
+    expect(checkout.body).toMatchObject({ amount: "299.00", kind: "subscribe" });
     expect(checkout.body.url).toBe(`http://localhost:4000/api/billing/test-checkout/${checkout.body.paymentId}`);
 
     const page = await api().get(`/api/billing/test-checkout/${checkout.body.paymentId}`);
     expect(page.status).toBe(200);
-    expect(page.text).toContain("1200.00 EGP");
+    expect(page.text).toContain("299.00 EGP");
 
     const done = await api()
       .post(`/api/billing/test-checkout/${checkout.body.paymentId}`)
@@ -132,7 +132,7 @@ describe("subscribing", () => {
       usage: { usersLimit: 10, invoicesLimit: null },
     });
     const [payment] = await paymentsOf(owner.token);
-    expect(payment).toMatchObject({ kind: "subscribe", plan: "pro", amount: "1200.00", status: "paid", periodEnd: addMonths(today(), 1) });
+    expect(payment).toMatchObject({ kind: "subscribe", plan: "pro", amount: "299.00", status: "paid", periodEnd: addMonths(today(), 1) });
     expect(payment.number).toMatch(/^SUB-\d{5}$/);
     const read = await api().get(`/api/billing/payments/${checkout.body.paymentId}`).set(auth(owner.token));
     expect(read.body.payment.status).toBe("paid");
@@ -142,7 +142,7 @@ describe("subscribing", () => {
     expect((await api().post("/api/invitations").set(auth(owner.token)).send({ name: "سارة", email: uniqueEmail(), role: "sales" })).status).toBe(201);
 
     const log = await api().get("/api/audit?action=settings").set(auth(owner.token));
-    expect(log.body.items[0]).toMatchObject({ event: "subscriptionStarted", values: { plan: "pro", amount: "1200.00" } });
+    expect(log.body.items[0]).toMatchObject({ event: "subscriptionStarted", values: { plan: "pro", amount: "299.00" } });
   });
 
   it("a declined payment changes nothing; the same plan or a lower one can't be bought", async () => {
@@ -202,7 +202,7 @@ describe("Paymob's callbacks", () => {
     const owner = await ownerSession({ plan: "free" });
     const checkout = (await api().post("/api/billing/checkout").set(auth(owner.token)).send({ plan: "pro" })).body;
     const orderId = `test-${checkout.paymentId}`;
-    const obj = transaction(checkout.paymentId, orderId, 120000);
+    const obj = transaction(checkout.paymentId, orderId, 29900);
 
     expect((await send("TRANSACTION", obj, "0".repeat(128))).status).toBe(401);
     expect((await api().post("/api/public/paymob/webhook").send({ type: "TRANSACTION", obj })).status).toBe(401);
@@ -232,7 +232,7 @@ describe("Paymob's callbacks", () => {
   it("a payment for another amount, or for another order, doesn't give the plan", async () => {
     const owner = await ownerSession({ plan: "free" });
     const checkout = (await api().post("/api/billing/checkout").set(auth(owner.token)).send({ plan: "pro" })).body;
-    await send("TRANSACTION", transaction(checkout.paymentId, "some-other-order", 120000)).expect(200);
+    await send("TRANSACTION", transaction(checkout.paymentId, "some-other-order", 29900)).expect(200);
     expect((await paymentsOf(owner.token))[0].status).toBe("pending");
     await send("TRANSACTION", transaction(checkout.paymentId, `test-${checkout.paymentId}`, 100)).expect(200);
     expect((await paymentsOf(owner.token))[0]).toMatchObject({ status: "failed", failureReason: "Amount differs from the price" });
@@ -248,8 +248,8 @@ describe("changing the plan", () => {
     await setSubscription(owner.companyId, { plan: "pro", start, end });
 
     const upgrade = await pay(owner.token, "business");
-    // (2500 - 1200) × 20 / 30
-    expect(upgrade).toMatchObject({ kind: "upgrade", amount: "866.67" });
+    // (799 - 299) × 20 / 30
+    expect(upgrade).toMatchObject({ kind: "upgrade", amount: "333.33" });
     expect((await billingOf(owner.token)).subscription).toMatchObject({ periodStart: start, periodEnd: end });
     expect((await billingOf(owner.token)).plan).toBe("business");
   });
@@ -283,7 +283,7 @@ describe("renewals (the hourly job)", () => {
       plan: "pro",
       subscription: { status: "active", periodStart: today(), periodEnd: addMonths(today(), 1), nextPlan: null },
     });
-    expect((await paymentsOf(owner.token))[0]).toMatchObject({ kind: "renewal", automatic: true, plan: "pro", amount: "1200.00", status: "paid" });
+    expect((await paymentsOf(owner.token))[0]).toMatchObject({ kind: "renewal", automatic: true, plan: "pro", amount: "299.00", status: "paid" });
     // Nothing more until the next due day.
     expect(await runBilling()).toMatchObject({ checked: 0 });
   });
@@ -322,7 +322,7 @@ describe("renewals (the hourly job)", () => {
     expect(await prisma.billingPayment.count()).toBe(0);
 
     const renewal = await pay(manual.token, "pro");
-    expect(renewal).toMatchObject({ kind: "renewal", amount: "1200.00" });
+    expect(renewal).toMatchObject({ kind: "renewal", amount: "299.00" });
     expect((await billingOf(manual.token)).subscription).toMatchObject({
       status: "active",
       periodStart: today(),
