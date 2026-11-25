@@ -1,4 +1,5 @@
 import type { Prisma } from "../../generated/prisma/client.js";
+import { isPlatformAdmin } from "../../lib/platform-admin.js";
 
 /** The fields of a user that are safe to send to the frontend. */
 export const publicUserSelect = {
@@ -21,12 +22,14 @@ export const sessionUserSelect = { ...publicUserSelect, passwordHash: true } sat
 export type SessionUser = PublicUser & {
   /** false for an account made with Google that never set one (no "current password" to ask). */
   hasPassword: boolean;
+  /** One of Mizan's own staff: also sees the platform admin pages. */
+  isPlatformAdmin: boolean;
 };
 
 /** Drops the hash itself: only whether there is one leaves the server. */
 export function toSessionUser(row: Prisma.UserGetPayload<{ select: typeof sessionUserSelect }>): SessionUser {
   const { passwordHash, ...user } = row;
-  return { ...user, hasPassword: passwordHash !== null };
+  return { ...user, hasPassword: passwordHash !== null, isPlatformAdmin: isPlatformAdmin(user.email) };
 }
 
 /** A member of the team, as the owner sees it in the team list. */

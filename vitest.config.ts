@@ -33,6 +33,8 @@ export default defineConfig({
       GMAIL_REFRESH_TOKEN: "",
       // Tests sign their own Google ID tokens for this client (setGoogleKeysForTests).
       GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+      // The platform admin pages (test/admin.test.ts); mixed case on purpose.
+      PLATFORM_ADMIN_EMAILS: " Admin@Mizan.test ,other-admin@mizan.test",
       PAYMOB_SECRET_KEY: "",
       PAYMOB_PUBLIC_KEY: "",
       PAYMOB_CARD_INTEGRATION_ID: "",

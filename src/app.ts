@@ -14,6 +14,7 @@ import { createInvoicesRouter, createPublicInvoicesRouter } from "./modules/invo
 import { createPaymentsRouter } from "./modules/payments/payments.routes.js";
 import { createProductsRouter } from "./modules/products/products.routes.js";
 import { createPublicQuotesRouter, createQuotesRouter } from "./modules/quotes/quotes.routes.js";
+import { createAdminRouter } from "./modules/admin/admin.routes.js";
 import { createReportsRouter } from "./modules/reports/reports.routes.js";
 import { createSettingsRouter } from "./modules/settings/settings.routes.js";
 import { createTasksRouter } from "./modules/tasks/tasks.routes.js";
@@ -93,6 +94,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/public/paymob", createPaymobWebhookRouter());
   app.use("/api/quotes", createQuotesRouter(limiters));
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
+  // Mizan's own staff: every company, its plan and usage (PLATFORM_ADMIN_EMAILS).
+  app.use("/api/admin", createAdminRouter());
 
   app.use(notFound);
   app.use(errorHandler);

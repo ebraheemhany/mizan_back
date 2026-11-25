@@ -82,6 +82,17 @@ const envSchema = z.object({
     .default("false")
     .transform((value) => (value === "false" ? false : /^\d+$/.test(value) ? Number(value) : value)),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  // Mizan's own staff: these accounts also open the platform admin pages (every
+  // company, its plan and how much it uses Mizan). Comma-separated emails; empty = nobody.
+  PLATFORM_ADMIN_EMAILS: z
+    .string()
+    .default("")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean),
+    ),
 }).superRefine((env, ctx) => {
   // Half a Gmail setup would silently send nothing: all four or none.
   const set = GMAIL_KEYS.filter((key) => env[key] !== undefined);
