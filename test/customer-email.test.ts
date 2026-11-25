@@ -32,7 +32,7 @@ async function invoiceFor(token: string, customerId: string, body: Record<string
 const sent = (tag: string) => testMail.outbox.filter((m) => m.tag === tag);
 
 describe("emailing an invoice", () => {
-  it("goes to the customer from the company, replies to the sender, links its page; recorded and logged", async () => {
+  it("goes to the customer through Mizan in the company's name, replies to the sender, links its page; recorded and logged", async () => {
     const owner = await verifiedOwner();
     const customer = await customerOf(owner.token);
     const invoice = await invoiceFor(owner.token, customer.id);
@@ -40,7 +40,9 @@ describe("emailing an invoice", () => {
     const res = await api().post(`/api/invoices/${invoice.number}/email`).set(auth(owner.token)).send({});
     expect(res.status).toBe(200);
     const [mail] = sent("invoice");
-    expect(mail).toMatchObject({ to: "billing@nile.example", fromName: "شركة ميزان", replyTo: owner.email });
+    expect(mail).toMatchObject({ to: "billing@nile.example", replyTo: owner.email });
+    // The inbox shows Mizan (MAIL_FROM's name) as the sender; the subject names the company.
+    expect(mail!.fromName).toBeUndefined();
     expect(mail!.subject).toBe(`فاتورة INV-${invoice.number} من شركة ميزان`);
     const { publicToken } = await prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
     expect(mail!.text).toContain(`http://localhost:3000/ar/i/${publicToken}`);

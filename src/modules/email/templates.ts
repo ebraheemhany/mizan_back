@@ -364,7 +364,6 @@ export function invoiceEmail(locale: Locale, to: string, from: Sender, inv: Invo
   return {
     to,
     subject: t.invoice.subject(inv.number, from.company),
-    fromName: from.company,
     replyTo: from.replyTo,
     tag: "invoice",
     ...render({
@@ -389,7 +388,6 @@ export function reminderEmail(locale: Locale, to: string, from: Sender, inv: Inv
   return {
     to,
     subject: (inv.overdue ? t.reminder.subjectOverdue : t.reminder.subject)(inv.number, from.company),
-    fromName: from.company,
     replyTo: from.replyTo,
     tag: "reminder",
     ...render({
@@ -420,7 +418,6 @@ export function quoteEmail(
   return {
     to,
     subject: t.quote.subject(quote.number, from.company),
-    fromName: from.company,
     replyTo: from.replyTo,
     tag: "quote",
     ...render({

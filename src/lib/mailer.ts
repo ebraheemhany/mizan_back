@@ -10,7 +10,11 @@ export type Mail = {
   subject: string;
   html: string;
   text: string;
-  /** Shown as the sender's name (the address is always MAIL_FROM's, or the Gmail account's). */
+  /**
+   * Shown as the sender's name (the address is always MAIL_FROM's, or the Gmail account's).
+   * Unset: MAIL_FROM's name, Mizan. Customer emails keep it so the inbox shows they come
+   * through Mizan; the company is named in the subject and at the top of the email.
+   */
   fromName?: string;
   /** Where the recipient's answer goes (e.g. the user who sent an invoice). */
   replyTo?: string;
