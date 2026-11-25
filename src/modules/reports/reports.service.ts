@@ -4,7 +4,7 @@ import { Decimal, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
-import { paymentNumber, VAT_RATE } from "../invoices/invoices.service.js";
+import { paymentNumber } from "../invoices/invoices.service.js";
 import { payrollCostByMonth, withPayroll } from "../payroll/payroll.service.js";
 import { ISSUED_SQL, ISSUED_STATUSES, revenueByMonth } from "./revenue.js";
 
@@ -257,11 +257,15 @@ export async function vatReport(companyId: string, periodKey: string | undefined
     issueDate: within(counted(period)),
   } satisfies Prisma.InvoiceWhereInput;
 
-  const [taxable, exempt] = await prisma.$transaction([
+  const [taxable, exempt, used, company] = await prisma.$transaction([
     prisma.invoice.aggregate({ where: { ...issued, vatRate: { gt: 0 } }, _sum: { subtotal: true, vat: true }, _count: true }),
     // VAT off in the settings when the invoice was written (vatRate 0).
     prisma.invoice.aggregate({ where: { ...issued, vatRate: 0 }, _sum: { subtotal: true, vat: true }, _count: true }),
+    // The rates the period's invoices were taxed at (more than one if it changed meanwhile).
+    prisma.invoice.groupBy({ by: ["vatRate"], where: { ...issued, vatRate: { gt: 0 } }, orderBy: { vatRate: "asc" } }),
+    prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { vatRate: true } }),
   ]);
+  const rates = used.map((r) => Number(r.vatRate));
 
   const output = (taxable._sum.vat ?? ZERO).plus(exempt._sum.vat ?? ZERO);
   const input = ZERO; // Expenses carry no VAT yet.
@@ -269,7 +273,9 @@ export async function vatReport(companyId: string, periodKey: string | undefined
   return {
     period: periodDto(period),
     currentMonth: monthKey(today),
-    rate: VAT_RATE,
+    // One rate: it; none yet: the company's rate now; several: null (see rates).
+    rate: rates.length === 1 ? rates[0]! : rates.length === 0 ? Number(company.vatRate) : null,
+    rates,
     output: moneyString(output),
     input: moneyString(input),
     due: moneyString(output.minus(input)),

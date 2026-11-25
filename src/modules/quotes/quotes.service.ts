@@ -19,7 +19,7 @@ import { sendMail } from "../../lib/mailer.js";
 import { audit } from "../audit/audit.service.js";
 import { customerMailSender, customerPageUrl, recipientOf } from "../email/customer-mail.js";
 import { quoteEmail } from "../email/templates.js";
-import { VAT_RATE } from "../invoices/invoices.service.js";
+import { vatRateOf } from "../invoices/invoices.service.js";
 import type {
   CreateQuoteInput,
   EmailQuoteInput,
@@ -415,8 +415,8 @@ async function assertProducts(companyId: string, items: Item[]) {
 }
 
 /** Line rows and totals, with VAT from the company's current setting. */
-function priced(items: Item[], vatEnabled: boolean) {
-  const vatRate = vatEnabled ? VAT_RATE : 0;
+function priced(items: Item[], company: { vatEnabled: boolean; vatRate: Decimal }) {
+  const vatRate = vatRateOf(company);
   const { amounts, subtotal, vat, total } = invoiceTotals(items, vatRate);
   const lines = items.map((item, position) => ({
     position,
@@ -470,9 +470,9 @@ async function insertQuote(actor: Actor, input: NewQuote, event: "quoteCreated" 
       const company = await tx.company.update({
         where: { id: actor.companyId },
         data: { quoteNextNumber: { increment: 1 } },
-        select: { quoteNextNumber: true, quotePrefix: true, vatEnabled: true },
+        select: { quoteNextNumber: true, quotePrefix: true, vatEnabled: true, vatRate: true },
       });
-      const { lines, totals } = priced(input.items, company.vatEnabled);
+      const { lines, totals } = priced(input.items, company);
       const now = Date.now();
 
       const quote = await tx.quote.create({
@@ -547,9 +547,9 @@ export async function updateQuote(actor: Actor, ref: QuoteRef, input: UpdateQuot
     await prisma.$transaction(async (tx) => {
       const company = await tx.company.findUniqueOrThrow({
         where: { id: actor.companyId },
-        select: { vatEnabled: true },
+        select: { vatEnabled: true, vatRate: true },
       });
-      const { lines, totals } = priced(input.items, company.vatEnabled);
+      const { lines, totals } = priced(input.items, company);
 
       // Still a draft, checked in the update itself (it may have been sent meanwhile).
       const { count } = await tx.quote.updateMany({

@@ -20,7 +20,8 @@ const fullSettings = {
 };
 
 /** What comes back: the same, plus the logo (uploaded separately; none here). */
-const savedSettings = { ...fullSettings, company: { ...fullSettings.company, logoId: null } };
+// The rate isn't in fullSettings: left out, it stays at 14.
+const savedSettings = { ...fullSettings, company: { ...fullSettings.company, logoId: null }, taxes: { ...fullSettings.taxes, vatRate: "14.00" } };
 
 const get = (token: string) => api().get("/api/settings").set(auth(token));
 const patch = (token: string, body: unknown) => api().patch("/api/settings").set(auth(token)).send(body);
@@ -32,7 +33,7 @@ describe("GET /api/settings", () => {
     expect(res.status).toBe(200);
     expect(res.body.settings).toEqual({
       company: { name: "شركة ميزان", taxNumber: null, commercialRegister: null, phone: null, address: null, logoId: null },
-      taxes: { vatEnabled: true, withholdingEnabled: false, currency: "EGP", fiscalStartMonth: 1 },
+      taxes: { vatEnabled: true, vatRate: "14.00", withholdingEnabled: false, currency: "EGP", fiscalStartMonth: 1 },
       numbering: { invoicePrefix: "INV-", invoiceNext: 1, quotePrefix: "Q-", quoteNext: 1, paymentTermsDays: 30 },
       template: { style: "classic", footer: null },
       notifications: { overdueInvoice: true, newPayment: true, taskReminder: true, weeklyDigest: false },

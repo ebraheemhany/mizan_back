@@ -7,7 +7,7 @@ import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
 import { checkRecurringAllowed } from "../billing/plans.js";
-import { createInvoice, VAT_RATE } from "../invoices/invoices.service.js";
+import { createInvoice, vatRateOf } from "../invoices/invoices.service.js";
 import type { ListRecurringQuery, RecurringFrequency, RecurringInput } from "./recurring.schemas.js";
 
 type Actor = { id: string; companyId: string; role: Role };
@@ -255,8 +255,8 @@ async function assertProducts(companyId: string, items: RecurringInput["items"])
 
 /** Lines and totals, with the company's VAT setting as it is now. */
 async function priced(companyId: string, items: RecurringInput["items"]) {
-  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { vatEnabled: true } });
-  const vatRate = company.vatEnabled ? VAT_RATE : 0;
+  const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { vatEnabled: true, vatRate: true } });
+  const vatRate = vatRateOf(company);
   const { amounts, subtotal, vat, total } = invoiceTotals(items, vatRate);
   const lines = items.map((item, position) => ({
     position,

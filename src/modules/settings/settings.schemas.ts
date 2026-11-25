@@ -15,8 +15,19 @@ const companySection = z.strictObject({
   address: optional(z.string().max(300)),
 });
 
+// The VAT rate in percent, up to 2 decimals ("14", "14.5"); kept as text for Decimal.
+const vatRate = z.preprocess(
+  (v) => (typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : v),
+  z
+    .string()
+    .regex(/^\d{1,3}(\.\d{1,2})?$/, "Must be a number with up to 2 decimals")
+    .refine((v) => Number(v) > 0 && Number(v) <= 100, "Must be more than 0 and at most 100"),
+);
+
 const taxesSection = z.strictObject({
   vatEnabled: z.boolean(),
+  // Optional: left out, the rate stays as it is.
+  vatRate: vatRate.optional(),
   withholdingEnabled: z.boolean(),
   currency: z.enum(["EGP", "USD", "SAR", "AED"]),
   fiscalStartMonth: z.number().int().min(1).max(12),

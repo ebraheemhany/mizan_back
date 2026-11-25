@@ -12,6 +12,7 @@ const settingsSelect = {
   address: true,
   currency: true,
   vatEnabled: true,
+  vatRate: true,
   withholdingEnabled: true,
   fiscalStartMonth: true,
   invoicePrefix: true,
@@ -42,6 +43,7 @@ function toDto(row: SettingsRow) {
     },
     taxes: {
       vatEnabled: row.vatEnabled,
+      vatRate: row.vatRate.toFixed(2),
       withholdingEnabled: row.withholdingEnabled,
       currency: row.currency,
       fiscalStartMonth: row.fiscalStartMonth,
@@ -93,6 +95,7 @@ export async function updateSettings(companyId: string, input: UpdateSettingsInp
   }
   if (input.taxes) {
     data.vatEnabled = input.taxes.vatEnabled;
+    if (input.taxes.vatRate !== undefined) data.vatRate = input.taxes.vatRate;
     data.withholdingEnabled = input.taxes.withholdingEnabled;
     data.currency = input.taxes.currency;
     data.fiscalStartMonth = input.taxes.fiscalStartMonth;

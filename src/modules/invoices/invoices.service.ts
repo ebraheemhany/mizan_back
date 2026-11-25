@@ -20,8 +20,11 @@ import type {
   ReminderInput,
 } from "./invoices.schemas.js";
 
-/** Egypt's standard VAT rate, used when VAT is on in the company settings. */
-export const VAT_RATE = 14;
+/**
+ * The VAT rate a new invoice or quote gets: the company's rate (14% in Egypt unless
+ * changed in the settings), or 0 with VAT off. Each document keeps the rate it got.
+ */
+export const vatRateOf = (company: { vatEnabled: boolean; vatRate: Decimal }) => (company.vatEnabled ? company.vatRate : ZERO);
 const EXPORT_LIMIT = 5000;
 
 type Actor = { id: string; companyId: string };
@@ -483,14 +486,14 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput, ori
       const company = await tx.company.update({
         where: { id: actor.companyId },
         data: { invoiceNextNumber: { increment: 1 } },
-        select: { invoiceNextNumber: true, invoicePrefix: true, vatEnabled: true, booksClosedThrough: true },
+        select: { invoiceNextNumber: true, invoicePrefix: true, vatEnabled: true, vatRate: true, booksClosedThrough: true },
       });
       // An issued invoice goes into the books on its date, which must be open (a draft doesn't, yet).
       if (input.send) checkBooksOpen(company.booksClosedThrough, [input.issueDate]);
       // The plan's invoices for the month (counted while the company row is held, so two at once
       // can't both take the last one). Recurring templates are a paid feature: their runs don't count.
       if (!origin) await checkInvoiceLimit(tx, actor.companyId);
-      const vatRate = company.vatEnabled ? VAT_RATE : 0;
+      const vatRate = vatRateOf(company);
       const { amounts, subtotal, vat, total } = invoiceTotals(input.items, vatRate);
       const now = Date.now();
       const number = company.invoiceNextNumber - 1;

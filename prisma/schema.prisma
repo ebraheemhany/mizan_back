@@ -31,6 +31,8 @@ model Company {
   // Taxes and money.
   currency           Currency @default(EGP)
   vatEnabled         Boolean  @default(true)
+  // The VAT rate new invoices and quotes get (percent); each document keeps its own.
+  vatRate            Decimal  @default(14) @db.Decimal(5, 2)
   withholdingEnabled Boolean  @default(false)
   fiscalStartMonth   Int      @default(1)
 

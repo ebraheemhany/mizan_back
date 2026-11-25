@@ -426,6 +426,7 @@ describe("GET /api/reports/vat", () => {
       period: { key: monthKey(), start: monthStart(), end: monthEnd() },
       currentMonth: monthKey(),
       rate: 14,
+      rates: [14],
       output: "140.02",
       input: "0.00",
       due: "140.02",
