@@ -289,6 +289,32 @@ describe("payroll", () => {
     expect(run.items[0].baseSalary).toBe(((3000 * (days - 10)) / days).toFixed(2));
   });
 
+  it("a part month takes its share of insurance and tax, and the installment never makes the pay negative", async () => {
+    const { token } = await ownerSession();
+    const { start, end } = monthRange(`${lastMonth()}-01`);
+    const days = Number(end.slice(8));
+    // On the books for the last 2 days of the month only.
+    const late = await employeeOf(token, {
+      hireDate: addDays(start, days - 2),
+      baseSalary: "3000",
+      allowances: "0",
+      insurance: "600",
+      employerInsurance: "900",
+      incomeTax: "300",
+    });
+    await api().post(`/api/employees/${late.id}/advances`).set(auth(token)).send({ amount: "1000", installment: "1000", date: addDays(start, days - 2), paidFrom: "cashbox" }).expect(201);
+    const [item] = (await runOf(token, lastMonth())).items;
+    const share = (v: number) => ((v * 2) / days).toFixed(2);
+    expect(item.baseSalary).toBe(share(3000));
+    expect(item.insurance).toBe(share(600));
+    expect(item.employerInsurance).toBe(share(900));
+    expect(item.incomeTax).toBe(share(300));
+    // Only what the pay leaves is taken this month; the net is zero, not negative.
+    expect(item.net).toBe("0.00");
+    expect(Number(item.advanceDeduction)).toBeLessThan(1000);
+    ok(await action(token, lastMonth(), "approve"));
+  });
+
   it("refresh brings in new employees and keeps what was typed", async () => {
     const { token } = await ownerSession();
     await employeeOf(token);

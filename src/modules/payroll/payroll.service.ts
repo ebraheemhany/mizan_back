@@ -237,19 +237,19 @@ async function lineFor(db: Db, companyId: string, e: Eligible, month: string, in
   const share = workedShare(e, month);
   const prorate = (v: Decimal) => (share === 1 ? v : v.times(share).toDecimalPlaces(2, Decimal.ROUND_HALF_UP));
   const days = await unpaidDays(db, companyId, e.id, month);
-  return {
-    name: e.name,
-    jobTitle: e.jobTitle,
+  // A part month takes its share of the insurance and tax too, like the pay.
+  const pay = {
     baseSalary: prorate(e.baseSalary),
     allowances: prorate(e.allowances),
     absenceDays: days,
     absenceDeduction: absenceAmount(e.baseSalary, days),
-    insurance: e.insurance,
-    employerInsurance: e.employerInsurance,
-    incomeTax: e.incomeTax,
-    advanceDeduction: installment,
-    payAccount: e.payAccount,
+    insurance: prorate(e.insurance),
+    employerInsurance: prorate(e.employerInsurance),
+    incomeTax: prorate(e.incomeTax),
   };
+  // The installment never takes the pay below zero; what's left waits for next month.
+  const left = Decimal.max(ZERO, payTotals(pay).net);
+  return { name: e.name, jobTitle: e.jobTitle, ...pay, advanceDeduction: Decimal.min(installment, left), payAccount: e.payAccount };
 }
 
 /** Each employee's installment this month (what's due on their open advances). */

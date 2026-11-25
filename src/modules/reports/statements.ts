@@ -99,6 +99,9 @@ const SECTIONS: Section[] = ["operating", "investing", "financing"];
 function classify(a: ChartAccount): { section: Section; key: string } {
   if (a.key === "customers" || a.key === "cheques") return { section: "operating", key: "customers" };
   if (a.key === "suppliers" || a.key === "vat") return { section: "operating", key: a.key };
+  // Paying salaries owed, or the insurance and tax withheld from them, is part of running the business.
+  if (a.key === "salariesPayable" || a.key === "socialInsurance" || a.key === "payrollTax") return { section: "operating", key: "salaries" };
+  if (a.key === "employeeAdvances") return { section: "operating", key: "employeeAdvances" };
   if (a.type === "revenue") return { section: "operating", key: "otherIncome" };
   if (a.type === "expense") return { section: "operating", key: a.key ?? "otherExpenses" };
   if (a.type === "asset") return { section: "investing", key: a.key === "fixedAssets" ? "fixedAssets" : "otherAssets" };
