@@ -1,12 +1,14 @@
 // Mizan's own view of the platform: every company, its plan, and how much it uses Mizan.
 // Counts and dates only. What is inside a company (its customers, amounts, documents)
 // stays its own business, so none of it is read here.
-import { Prisma, type PlanId } from "../../generated/prisma/client.js";
-import { addDays, businessToday, monthRange } from "../../lib/dates.js";
+import { Prisma, type BillingPaymentKind, type PlanId } from "../../generated/prisma/client.js";
+import { addDays, addMonths, businessToday, monthRange, toDate, toIso } from "../../lib/dates.js";
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
+import { audit } from "../audit/audit.service.js";
+import { paymentNumber } from "../billing/billing.service.js";
 import { businessDayStart, PLANS } from "../billing/plans.js";
-import { ADMIN_PAGE_SIZE, type ListCompaniesQuery } from "./admin.schemas.js";
+import { ADMIN_PAGE_SIZE, type ActivateSubscriptionInput, type ListCompaniesQuery } from "./admin.schemas.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -257,6 +259,8 @@ export async function getCompany(id: string) {
         currency: true,
         status: true,
         automatic: true,
+        manual: true,
+        note: true,
         createdAt: true,
         paidAt: true,
         periodStart: true,
@@ -338,17 +342,103 @@ export async function getCompany(id: string) {
       }),
     },
     billing: billing.map((b) => ({
-      number: `SUB-${String(b.number).padStart(5, "0")}`,
+      number: paymentNumber(b.number),
       kind: b.kind,
       plan: b.plan,
       amount: b.amount.toFixed(2),
       currency: b.currency,
       status: b.status,
       automatic: b.automatic,
+      manual: b.manual,
+      note: b.note,
       createdAt: b.createdAt,
       paidAt: b.paidAt,
       periodStart: isoDate(b.periodStart),
       periodEnd: isoDate(b.periodEnd),
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Activating a plan paid outside Paymob
+// ---------------------------------------------------------------------------
+
+/**
+ * Records a plan the company paid for outside Paymob (cash, a transfer), the way a paid
+ * checkout would: the same plan, still running or waiting for its renewal, is extended
+ * from the end of its paid period; another plan, or a company on the free plan, starts a
+ * new period today. A saved card stays, so the plan renews on it afterwards as usual.
+ */
+export async function activateSubscription(adminId: string, companyId: string, input: ActivateSubscriptionInput) {
+  if (!/^[0-9a-f-]{36}$/i.test(companyId)) throw notFound();
+
+  await prisma.$transaction(async (tx) => {
+    const company = await tx.company.findUnique({ where: { id: companyId }, select: { id: true } });
+    if (!company) throw notFound();
+    // The renewal job, a Paymob callback and this can't cross.
+    await tx.$queryRaw`SELECT 1 FROM "subscriptions" WHERE "companyId" = ${companyId} FOR UPDATE`;
+    const sub = await tx.subscription.findUnique({ where: { companyId } });
+
+    const today = businessToday();
+    const running = sub !== null && sub.status !== "ended";
+    const extend = running && sub.plan === input.plan;
+    let kind: BillingPaymentKind;
+    let periodStart: string;
+    let periodEnd: string;
+    if (extend) {
+      // Follows on from what is already paid (for a renewal not paid yet, from when it was due).
+      kind = "renewal";
+      periodStart = toIso(sub.currentPeriodEnd);
+      periodEnd = addMonths(periodStart, input.months);
+    } else {
+      kind = "subscribe";
+      periodStart = today;
+      periodEnd = addMonths(today, input.months);
+    }
+
+    const data = {
+      plan: input.plan,
+      status: "active" as const,
+      // An extension of a running period keeps its start (it is one longer paid period).
+      currentPeriodStart: toDate(extend && sub.status === "active" ? toIso(sub.currentPeriodStart) : periodStart),
+      currentPeriodEnd: toDate(periodEnd),
+      cancelAtPeriodEnd: false,
+      nextPlan: null,
+      renewalAttempts: 0,
+      nextAttemptAt: null,
+    };
+    await tx.subscription.upsert({ where: { companyId }, create: { companyId, ...data }, update: data });
+
+    const payment = await tx.billingPayment.create({
+      data: {
+        companyId,
+        kind,
+        plan: input.plan,
+        amount: new Prisma.Decimal(input.amount),
+        currency: "EGP",
+        status: "paid",
+        manual: true,
+        note: input.note || null,
+        periodStart: toDate(periodStart),
+        periodEnd: toDate(periodEnd),
+        createdById: adminId,
+        paidAt: new Date(),
+      },
+    });
+
+    // The company's own activity log says Mizan did it (not one of its members).
+    await audit(
+      tx,
+      companyId,
+      {
+        action: "settings",
+        event: "subscriptionActivatedByMizan",
+        item: { type: "subscription", ref: paymentNumber(payment.number) },
+        values: { plan: input.plan, amount: new Prisma.Decimal(input.amount).toFixed(2), through: periodEnd },
+      },
+      { id: null, name: null },
+    );
+  });
+
+  return getCompany(companyId);
 }

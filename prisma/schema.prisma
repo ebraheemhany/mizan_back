@@ -1138,6 +1138,10 @@ model BillingPayment {
   cardBrand            String?
   // One automatic charge per renewal date and attempt, even with two servers running the job.
   renewalKey           String? @unique
+  // Recorded by Mizan's staff for a payment made outside Paymob (cash, a transfer), with
+  // what they noted about it (seen only in the platform admin pages).
+  manual               Boolean @default(false)
+  note                 String?
 
   createdById String?
   createdBy   User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)

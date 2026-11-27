@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { addMonths, businessToday, toDate } from "../src/lib/dates.js";
+import { addDays, addMonths, businessToday, toDate } from "../src/lib/dates.js";
 import { api, auth, login, prisma, registerUser, resetDatabase, uniqueEmail } from "./helpers.js";
 
 beforeEach(resetDatabase);
@@ -190,4 +190,107 @@ it("an admin listed with another email is an admin too", async () => {
   const { accessToken } = await login(email);
   expect((await get("/api/admin/overview", accessToken)).status).toBe(200);
   expect(uniqueEmail()).not.toBe(email);
+});
+
+describe("POST /api/admin/companies/:id/subscription (a plan paid outside Paymob)", () => {
+  const activate = (token: string, companyId: string, body: Record<string, unknown>) =>
+    api().post(`/api/admin/companies/${companyId}/subscription`).set(auth(token)).send(body);
+  const subscriptionOf = (companyId: string) => prisma.subscription.findUniqueOrThrow({ where: { companyId } });
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+  it("starts a plan today for a company on the free plan, and records the payment", async () => {
+    const token = await adminToken();
+    const free = await company();
+    const today = businessToday();
+
+    const res = await activate(token, free.companyId, { plan: "pro", months: 3, amount: "897", note: "تحويل بنكي" });
+    expect(res.status).toBe(201);
+    expect(res.body.plan.id).toBe("pro");
+    expect(res.body.billing[0]).toMatchObject({ kind: "subscribe", plan: "pro", amount: "897.00", status: "paid", manual: true, note: "تحويل بنكي" });
+
+    const sub = await subscriptionOf(free.companyId);
+    expect(sub).toMatchObject({ plan: "pro", status: "active", cancelAtPeriodEnd: false, renewalAttempts: 0 });
+    expect(iso(sub.currentPeriodStart)).toBe(today);
+    expect(iso(sub.currentPeriodEnd)).toBe(addMonths(today, 3));
+
+    // The company's own log says Mizan did it.
+    const event = await prisma.auditEvent.findFirst({ where: { companyId: free.companyId, event: "subscriptionActivatedByMizan" } });
+    expect(event).toMatchObject({ action: "settings", userId: null });
+
+    // The company sees the payment in its history, without the staff's note.
+    const history = await get("/api/billing/payments", free.token);
+    expect(history.body.items[0]).toMatchObject({ plan: "pro", amount: "897.00", status: "paid" });
+    expect(JSON.stringify(history.body)).not.toContain("تحويل بنكي");
+    // And the plan is in force for it.
+    expect((await get("/api/billing", free.token)).body.billing.plan).toBe("pro");
+  });
+
+  it("extends the same running plan from the end of its paid period", async () => {
+    const token = await adminToken();
+    const pro = await company("pro");
+    const before = await subscriptionOf(pro.companyId);
+
+    const res = await activate(token, pro.companyId, { plan: "pro", months: 2, amount: "598" });
+    expect(res.status).toBe(201);
+    const after = await subscriptionOf(pro.companyId);
+    expect(iso(after.currentPeriodStart)).toBe(iso(before.currentPeriodStart));
+    expect(iso(after.currentPeriodEnd)).toBe(addMonths(iso(before.currentPeriodEnd), 2));
+    expect(res.body.billing[0]).toMatchObject({ kind: "renewal", periodStart: iso(before.currentPeriodEnd) });
+  });
+
+  it("pays a renewal that wasn't paid: from when it was due, and the plan is active again", async () => {
+    const token = await adminToken();
+    const late = await company("pro", "pastDue");
+    const due = addDays(businessToday(), -3);
+    await prisma.subscription.update({
+      where: { companyId: late.companyId },
+      data: { currentPeriodStart: toDate(addMonths(due, -1)), currentPeriodEnd: toDate(due), renewalAttempts: 2, nextAttemptAt: new Date() },
+    });
+
+    await activate(token, late.companyId, { plan: "pro", months: 1, amount: "299" }).expect(201);
+    const sub = await subscriptionOf(late.companyId);
+    expect(sub).toMatchObject({ status: "active", renewalAttempts: 0, nextAttemptAt: null });
+    expect(iso(sub.currentPeriodStart)).toBe(due);
+    expect(iso(sub.currentPeriodEnd)).toBe(addMonths(due, 1));
+  });
+
+  it("starts another plan (or an ended one) today, and keeps a saved card", async () => {
+    const token = await adminToken();
+    const pro = await company("pro");
+    await prisma.subscription.update({
+      where: { companyId: pro.companyId },
+      data: { cardToken: "tok_saved", cardMasked: "xxxx-1234", cancelAtPeriodEnd: true, nextPlan: null },
+    });
+    const today = businessToday();
+
+    await activate(token, pro.companyId, { plan: "business", months: 1, amount: "799" }).expect(201);
+    const sub = await subscriptionOf(pro.companyId);
+    expect(sub).toMatchObject({ plan: "business", status: "active", cancelAtPeriodEnd: false, cardToken: "tok_saved" });
+    expect(iso(sub.currentPeriodStart)).toBe(today);
+    expect(iso(sub.currentPeriodEnd)).toBe(addMonths(today, 1));
+
+    const ended = await company("pro", "ended");
+    await activate(token, ended.companyId, { plan: "pro", months: 12, amount: "0" }).expect(201);
+    const back = await subscriptionOf(ended.companyId);
+    expect(back.status).toBe("active");
+    expect(iso(back.currentPeriodStart)).toBe(today);
+    expect(iso(back.currentPeriodEnd)).toBe(addMonths(today, 12));
+  });
+
+  it("checks what it's given, and is only for admins", async () => {
+    const token = await adminToken();
+    const other = await company();
+    for (const body of [
+      { plan: "free", months: 1, amount: "0" },
+      { plan: "pro", months: 0, amount: "299" },
+      { plan: "pro", months: 25, amount: "299" },
+      { plan: "pro", months: 1, amount: "-5" },
+      { plan: "pro", months: 1, amount: "abc" },
+    ]) {
+      expect((await activate(token, other.companyId, body)).status).toBe(400);
+    }
+    expect((await activate(token, "00000000-0000-0000-0000-000000000000", { plan: "pro", months: 1, amount: "299" })).status).toBe(404);
+    expect((await activate(other.token, other.companyId, { plan: "pro", months: 1, amount: "299" })).status).toBe(404);
+    expect(await prisma.subscription.count({ where: { companyId: other.companyId } })).toBe(0);
+  });
 });

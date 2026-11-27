@@ -12,3 +12,21 @@ export const listCompaniesQuerySchema = z.object({
 });
 
 export type ListCompaniesQuery = z.infer<typeof listCompaniesQuerySchema>;
+
+/**
+ * A plan paid outside Paymob (cash, a transfer), recorded by Mizan's staff: the same
+ * plan is extended from the end of its paid period; another plan (or none) starts today.
+ */
+export const activateSubscriptionSchema = z.object({
+  plan: z.enum(["pro", "business"]),
+  months: z.number().int().min(1).max(24),
+  /** What the company paid (EGP), kept as a string so nothing is rounded early. */
+  amount: z.preprocess(
+    (v) => (typeof v === "number" ? String(v) : typeof v === "string" ? v.trim().replace(/,/g, "") : v),
+    z.string().regex(/^\d{1,9}(\.\d{1,2})?$/, "Must be an amount with up to 2 decimals"),
+  ),
+  /** How it was paid, for the record (seen only here). */
+  note: z.string().trim().max(200).optional(),
+});
+
+export type ActivateSubscriptionInput = z.infer<typeof activateSubscriptionSchema>;
