@@ -510,8 +510,11 @@ export async function resumeSubscription(actor: Actor) {
   return getBilling(actor.companyId);
 }
 
-/** Back to the free plan: recurring invoices (a paid feature) are paused. */
-async function endSubscription(tx: Db, sub: Subscription, reason: "canceled" | "unpaid") {
+/**
+ * Back to the free plan: recurring invoices (a paid feature) are paused. "mizan": ended
+ * by Mizan's staff from the platform admin pages (its own line in the company's log).
+ */
+export async function endSubscription(tx: Db, sub: Subscription, reason: "canceled" | "unpaid" | "mizan") {
   await tx.subscription.update({
     where: { companyId: sub.companyId },
     data: {
@@ -528,12 +531,9 @@ async function endSubscription(tx: Db, sub: Subscription, reason: "canceled" | "
   await audit(
     tx,
     sub.companyId,
-    {
-      action: "settings",
-      event: "subscriptionEnded",
-      item: { type: "subscription" },
-      values: { plan: sub.plan, why: reason, count: paused.count },
-    },
+    reason === "mizan"
+      ? { action: "settings", event: "subscriptionEndedByMizan", item: { type: "subscription" }, values: { plan: sub.plan, count: paused.count } }
+      : { action: "settings", event: "subscriptionEnded", item: { type: "subscription" }, values: { plan: sub.plan, why: reason, count: paused.count } },
     SYSTEM,
   );
 }

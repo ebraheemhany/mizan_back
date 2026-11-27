@@ -30,3 +30,14 @@ export const activateSubscriptionSchema = z.object({
 });
 
 export type ActivateSubscriptionInput = z.infer<typeof activateSubscriptionSchema>;
+
+/**
+ * Ending a company's plan: "now" puts it back on the free plan at once (e.g. a plan
+ * activated by mistake); "periodEnd" lets it run to the end of what is paid, without
+ * renewing (as the owner's own cancellation does).
+ */
+export const endSubscriptionSchema = z.object({
+  when: z.enum(["now", "periodEnd"]),
+});
+
+export type EndSubscriptionInput = z.infer<typeof endSubscriptionSchema>;

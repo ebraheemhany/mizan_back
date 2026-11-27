@@ -6,9 +6,14 @@ import { addDays, addMonths, businessToday, monthRange, toDate, toIso } from "..
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
-import { paymentNumber } from "../billing/billing.service.js";
+import { endSubscription as endPlan, paymentNumber } from "../billing/billing.service.js";
 import { businessDayStart, PLANS } from "../billing/plans.js";
-import { ADMIN_PAGE_SIZE, type ActivateSubscriptionInput, type ListCompaniesQuery } from "./admin.schemas.js";
+import {
+  ADMIN_PAGE_SIZE,
+  type ActivateSubscriptionInput,
+  type EndSubscriptionInput,
+  type ListCompaniesQuery,
+} from "./admin.schemas.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -435,6 +440,44 @@ export async function activateSubscription(adminId: string, companyId: string, i
         event: "subscriptionActivatedByMizan",
         item: { type: "subscription", ref: paymentNumber(payment.number) },
         values: { plan: input.plan, amount: new Prisma.Decimal(input.amount).toFixed(2), through: periodEnd },
+      },
+      { id: null, name: null },
+    );
+  });
+
+  return getCompany(companyId);
+}
+
+/**
+ * Ends a company's paid plan: at once (back to free now, recurring invoices paused), or
+ * at the end of the paid period without renewing. A renewal that wasn't paid has no
+ * paid days left, so it ends at once either way.
+ */
+export async function endSubscription(companyId: string, input: EndSubscriptionInput) {
+  if (!/^[0-9a-f-]{36}$/i.test(companyId)) throw notFound();
+
+  await prisma.$transaction(async (tx) => {
+    const company = await tx.company.findUnique({ where: { id: companyId }, select: { id: true } });
+    if (!company) throw notFound();
+    await tx.$queryRaw`SELECT 1 FROM "subscriptions" WHERE "companyId" = ${companyId} FOR UPDATE`;
+    const sub = await tx.subscription.findUnique({ where: { companyId } });
+    if (!sub || sub.status === "ended") {
+      throw new AppError(409, "NO_SUBSCRIPTION", "The company is on the free plan");
+    }
+
+    if (input.when === "now" || sub.status === "pastDue") {
+      await endPlan(tx, sub, "mizan");
+      return;
+    }
+    await tx.subscription.update({ where: { companyId }, data: { cancelAtPeriodEnd: true, nextPlan: null } });
+    await audit(
+      tx,
+      companyId,
+      {
+        action: "settings",
+        event: "subscriptionCancelledByMizan",
+        item: { type: "subscription" },
+        values: { plan: sub.plan, through: toIso(sub.currentPeriodEnd) },
       },
       { id: null, name: null },
     );

@@ -294,3 +294,55 @@ describe("POST /api/admin/companies/:id/subscription (a plan paid outside Paymob
     expect(await prisma.subscription.count({ where: { companyId: other.companyId } })).toBe(0);
   });
 });
+
+describe("POST /api/admin/companies/:id/subscription/end", () => {
+  const end = (token: string, companyId: string, when: unknown) =>
+    api().post(`/api/admin/companies/${companyId}/subscription/end`).set(auth(token)).send({ when });
+  const subscriptionOf = (companyId: string) => prisma.subscription.findUniqueOrThrow({ where: { companyId } });
+
+  it("now: back to the free plan at once, and the company's log says Mizan did it", async () => {
+    const token = await adminToken();
+    const pro = await company("pro");
+
+    const res = await end(token, pro.companyId, "now");
+    expect(res.status).toBe(200);
+    expect(res.body.plan.id).toBe("free");
+    expect((await subscriptionOf(pro.companyId)).status).toBe("ended");
+    expect((await get("/api/billing", pro.token)).body.billing.plan).toBe("free");
+    const event = await prisma.auditEvent.findFirst({ where: { companyId: pro.companyId, event: "subscriptionEndedByMizan" } });
+    expect(event).toMatchObject({ action: "settings", userId: null, values: { plan: "pro", count: 0 } });
+  });
+
+  it("periodEnd: runs to the end of what is paid, then doesn't renew", async () => {
+    const token = await adminToken();
+    const pro = await company("pro");
+    await prisma.subscription.update({ where: { companyId: pro.companyId }, data: { nextPlan: "pro" } });
+
+    const res = await end(token, pro.companyId, "periodEnd");
+    expect(res.status).toBe(200);
+    expect(res.body.plan.id).toBe("pro");
+    expect(res.body.subscription).toMatchObject({ status: "active", cancelAtPeriodEnd: true, nextPlan: null });
+    const event = await prisma.auditEvent.findFirst({ where: { companyId: pro.companyId, event: "subscriptionCancelledByMizan" } });
+    expect(event?.values).toMatchObject({ plan: "pro" });
+  });
+
+  it("a renewal that wasn't paid ends at once either way", async () => {
+    const token = await adminToken();
+    const late = await company("pro", "pastDue");
+    await end(token, late.companyId, "periodEnd").expect(200);
+    expect((await subscriptionOf(late.companyId)).status).toBe("ended");
+  });
+
+  it("refuses a company on the free plan, a bad choice, and non-admins", async () => {
+    const token = await adminToken();
+    const free = await company();
+    const res = await end(token, free.companyId, "now");
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("NO_SUBSCRIPTION");
+
+    const pro = await company("pro");
+    expect((await end(token, pro.companyId, "tomorrow")).status).toBe(400);
+    expect((await end(pro.token, pro.companyId, "now")).status).toBe(404);
+    expect((await subscriptionOf(pro.companyId)).status).toBe("active");
+  });
+});

@@ -4,8 +4,8 @@ import { parseQuery, validateBody } from "../../middleware/validate.js";
 import { AppError } from "../../lib/errors.js";
 import { isPlatformAdmin } from "../../lib/platform-admin.js";
 import { prisma } from "../../lib/prisma.js";
-import { activateSubscriptionSchema, listCompaniesQuerySchema } from "./admin.schemas.js";
-import { activateSubscription, getCompany, getOverview, listCompanies } from "./admin.service.js";
+import { activateSubscriptionSchema, endSubscriptionSchema, listCompaniesQuerySchema } from "./admin.schemas.js";
+import { activateSubscription, endSubscription, getCompany, getOverview, listCompanies } from "./admin.service.js";
 
 /**
  * Mizan's own staff only (PLATFORM_ADMIN_EMAILS). Anyone else gets a plain 404, as if
@@ -36,6 +36,11 @@ export function createAdminRouter() {
   // A plan paid outside Paymob (cash, a transfer): activated or extended by hand.
   router.post("/companies/:id/subscription", validateBody(activateSubscriptionSchema), async (req, res) => {
     res.status(201).json(await activateSubscription(req.user!.id, String(req.params.id), req.body));
+  });
+
+  // Back to the free plan: now, or at the end of what is paid.
+  router.post("/companies/:id/subscription/end", validateBody(endSubscriptionSchema), async (req, res) => {
+    res.json(await endSubscription(String(req.params.id), req.body));
   });
 
   return router;
