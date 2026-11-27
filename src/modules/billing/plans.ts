@@ -23,8 +23,8 @@ export const PLANS: Record<PlanId, Plan> = {
   free: {
     id: "free",
     price: 0,
-    users: 1,
-    invoicesPerMonth: 10,
+    users: 3,
+    invoicesPerMonth: 100,
     recurring: false,
     payroll: false,
   },

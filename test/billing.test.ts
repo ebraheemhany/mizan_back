@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { addDays, addMonths, businessToday, toDate } from "../src/lib/dates.js";
 import { runBilling } from "../src/modules/billing/billing.service.js";
+import { PLANS } from "../src/modules/billing/plans.js";
 import { callbackHmac, DECLINED_TEST_CARD } from "../src/modules/billing/paymob.js";
 import { api, auth, ownerSession, prisma, resetDatabase, teamMember, uniqueEmail } from "./helpers.js";
 
@@ -72,16 +73,43 @@ function setSubscription(
 }
 
 describe("the free plan's limits", () => {
-  it("10 invoices a month, one user, no recurring invoices; the plan shows what's used", async () => {
+  it("100 invoices a month, three users, no recurring invoices; the plan shows what's used", async () => {
+    expect(PLANS.free).toMatchObject({ invoicesPerMonth: 100, users: 3 });
     const owner = await ownerSession({ plan: "free" });
     const customer = await customerOf(owner.token);
-    for (let i = 0; i < 10; i++) expect((await invoice(owner.token, customer.id)).status).toBe(201);
+    expect((await invoice(owner.token, customer.id)).status).toBe(201);
+    // Most of the month's allowance straight into the database (100 requests would be slow),
+    // copied from that first one; the last allowed one and the one over go through the API.
+    const first = await prisma.invoice.findFirstOrThrow({ where: { companyId: owner.companyId } });
+    await prisma.invoice.createMany({
+      data: Array.from({ length: 98 }, (_, i) => ({
+        companyId: owner.companyId,
+        customerId: customer.id,
+        number: 1000 + i,
+        numberPrefix: first.numberPrefix,
+        status: "draft" as const,
+        issueDate: first.issueDate,
+        dueDate: first.dueDate,
+        paymentTermsDays: first.paymentTermsDays,
+        customerName: first.customerName,
+        subtotal: first.subtotal,
+        vatRate: first.vatRate,
+        vat: first.vat,
+        total: first.total,
+      })),
+    });
+    expect((await invoice(owner.token, customer.id)).status).toBe(201);
 
-    const eleventh = await invoice(owner.token, customer.id);
-    expect(eleventh.status).toBe(402);
-    expect(eleventh.body.error).toMatchObject({ code: "PLAN_LIMIT_INVOICES", details: { plan: "free", limit: 10 } });
+    const over = await invoice(owner.token, customer.id);
+    expect(over.status).toBe(402);
+    expect(over.body.error).toMatchObject({ code: "PLAN_LIMIT_INVOICES", details: { plan: "free", limit: 100 } });
 
-    const invite = await api().post("/api/invitations").set(auth(owner.token)).send({ name: "سارة", email: uniqueEmail(), role: "sales" });
+    // The owner and two more; a fourth is refused (pending invitations take a seat).
+    const inviteOne = () =>
+      api().post("/api/invitations").set(auth(owner.token)).send({ name: "سارة", email: uniqueEmail(), role: "sales" });
+    expect((await inviteOne()).status).toBe(201);
+    expect((await inviteOne()).status).toBe(201);
+    const invite = await inviteOne();
     expect(invite.status).toBe(402);
     expect(invite.body.error.code).toBe("PLAN_LIMIT_USERS");
 
@@ -92,11 +120,11 @@ describe("the free plan's limits", () => {
     expect(await billingOf(owner.token)).toMatchObject({
       plan: "free",
       subscription: null,
-      usage: { users: 1, usersLimit: 1, invoicesThisMonth: 10, invoicesLimit: 10 },
+      usage: { users: 3, usersLimit: 3, invoicesThisMonth: 100, invoicesLimit: 100 },
       testMode: true,
     });
     // The dashboard's plan card counts the same.
-    expect((await api().get("/api/dashboard").set(auth(owner.token))).body.invoicesThisMonth).toBe(10);
+    expect((await api().get("/api/dashboard").set(auth(owner.token))).body.invoicesThisMonth).toBe(100);
   });
 });
 
