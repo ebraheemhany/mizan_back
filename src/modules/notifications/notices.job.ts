@@ -1,4 +1,5 @@
 import { logger } from "../../lib/logger.js";
+import { reportError } from "../../lib/error-alerts.js";
 import { runNotices } from "./notices.service.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -20,6 +21,7 @@ export function startNoticesJob() {
       if (result.sent > 0) logger.info(result, "Notices run");
     } catch (err) {
       logger.error({ err }, "Notices run failed");
+      void reportError(err, { where: "job: notices" });
     } finally {
       running = false;
     }

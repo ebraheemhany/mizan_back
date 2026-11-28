@@ -17,8 +17,13 @@ export type Plan = {
   recurring: boolean;
   /** Employees and payroll. */
   payroll: boolean;
-  /** Messages to the assistant (Claude) a calendar month, the whole company. */
+  /** Messages to the assistant a calendar month, the whole company. */
   assistantMessages: number;
+  /**
+   * And a day (Cairo): the free AI models have a daily quota shared by every company, so
+   * one company can't use it all up.
+   */
+  assistantMessagesPerDay: number;
 };
 
 export const PLANS: Record<PlanId, Plan> = {
@@ -30,6 +35,7 @@ export const PLANS: Record<PlanId, Plan> = {
     recurring: false,
     payroll: false,
     assistantMessages: 20,
+    assistantMessagesPerDay: 5,
   },
   pro: {
     id: "pro",
@@ -39,6 +45,7 @@ export const PLANS: Record<PlanId, Plan> = {
     recurring: true,
     payroll: true,
     assistantMessages: 200,
+    assistantMessagesPerDay: 15,
   },
   business: {
     id: "business",
@@ -48,6 +55,7 @@ export const PLANS: Record<PlanId, Plan> = {
     recurring: true,
     payroll: true,
     assistantMessages: 1000,
+    assistantMessagesPerDay: 30,
   },
 };
 

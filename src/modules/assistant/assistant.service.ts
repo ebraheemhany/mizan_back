@@ -20,22 +20,36 @@ const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 const thisMonth = () => businessToday().slice(0, 7);
 
+const usageKey = (companyId: string) => ({ companyId_month: { companyId, month: thisMonth() } });
+
+/** The month's and today's messages against the plan's limits. */
 export async function usage(companyId: string) {
   const plan = await currentPlan(prisma, companyId);
-  const row = await prisma.assistantUsage.findUnique({ where: { companyId_month: { companyId, month: thisMonth() } } });
-  return { month: thisMonth(), used: row?.messages ?? 0, limit: plan.assistantMessages, plan: plan.id };
+  const row = await prisma.assistantUsage.findUnique({ where: usageKey(companyId) });
+  const today = businessToday();
+  return {
+    month: thisMonth(),
+    used: row?.messages ?? 0,
+    limit: plan.assistantMessages,
+    today: { used: row?.day === today ? row.dayMessages : 0, limit: plan.assistantMessagesPerDay },
+    plan: plan.id,
+  };
 }
 
-/** Before a new message: refuses past the plan's limit, else counts it. */
+/** Before a new message: refuses past the plan's monthly or daily limit, else counts it. */
 export async function countMessage(companyId: string) {
-  const { used, limit, plan } = await usage(companyId);
+  const { used, limit, today, plan } = await usage(companyId);
   if (used >= limit) {
     throw new AppError(402, "PLAN_LIMIT_ASSISTANT", "This plan's assistant messages for the month are used up", { plan, limit });
   }
+  if (today.used >= today.limit) {
+    throw new AppError(402, "PLAN_LIMIT_ASSISTANT_DAY", "This plan's assistant messages for today are used up", { plan, limit: today.limit });
+  }
+  const day = businessToday();
   await prisma.assistantUsage.upsert({
-    where: { companyId_month: { companyId, month: thisMonth() } },
-    create: { companyId, month: thisMonth(), messages: 1 },
-    update: { messages: { increment: 1 } },
+    where: usageKey(companyId),
+    create: { companyId, month: thisMonth(), messages: 1, day, dayMessages: 1 },
+    update: { messages: { increment: 1 }, day, dayMessages: today.used + 1 },
   });
 }
 

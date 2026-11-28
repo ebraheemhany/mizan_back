@@ -1,4 +1,5 @@
 import { logger } from "../../lib/logger.js";
+import { reportError } from "../../lib/error-alerts.js";
 import { runBilling } from "./billing.service.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -20,6 +21,7 @@ export function startBillingJob() {
       if (result.checked > 0 || result.expired > 0) logger.info(result, "Subscriptions run");
     } catch (err) {
       logger.error({ err }, "Subscriptions run failed");
+      void reportError(err, { where: "job: subscriptions" });
     } finally {
       running = false;
     }

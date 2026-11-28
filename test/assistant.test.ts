@@ -325,6 +325,23 @@ describe("the assistant", () => {
     expect(await prisma.assistantConversation.count()).toBe(0);
   });
 
+  it("stops at the plan's share of the day, so one company can't use up the free model", async () => {
+    const { token, companyId } = await ownerSession({ plan: "pro" });
+    const today = businessToday();
+    await prisma.assistantUsage.create({ data: { companyId, month: today.slice(0, 7), messages: 40, day: today, dayMessages: 15 } });
+    script(say(text("…")));
+    const res = await ask(token, { text: "مرحبا" });
+    expect(res.status).toBe(402);
+    expect(res.body.error).toMatchObject({ code: "PLAN_LIMIT_ASSISTANT_DAY", details: { limit: 15 } });
+    expect((await api().get("/api/assistant/status").set(auth(token))).body.usage).toMatchObject({ used: 40, limit: 200, today: { used: 15, limit: 15 } });
+
+    // Yesterday's messages don't count today.
+    await prisma.assistantUsage.updateMany({ data: { day: "2000-01-01" } });
+    const ok = await ask(token, { text: "مرحبا" });
+    expect(ok.status).toBe(200);
+    expect(await prisma.assistantUsage.findFirstOrThrow()).toMatchObject({ messages: 41, day: today, dayMessages: 1 });
+  });
+
   it("a conversation is its owner's only", async () => {
     const { token: owner } = await ownerSession();
     const other = await teamMember(owner, "accountant");

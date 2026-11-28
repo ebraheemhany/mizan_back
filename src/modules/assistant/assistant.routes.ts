@@ -9,6 +9,7 @@ import { authenticate } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { assistantEnabled, closeDanglingCalls, runChanges, runTurn, type AssistantEvent } from "./assistant.agent.js";
 import { ModelUnavailableError, type ChatMessage } from "./assistant.llm.js";
+import { reportError } from "../../lib/error-alerts.js";
 import { staticPrompt } from "./assistant.prompt.js";
 import {
   addTokens,
@@ -122,6 +123,10 @@ async function streamTurn(
         : "assistant turn failed",
     );
     stream.send(event);
+    // Mizan's staff hear of it (keys refused, the free quota used up, a bug), not only the user.
+    if (!(err instanceof AppError)) {
+      void reportError(err, { where: `assistant (${event.code})`, userId: actor.id, companyId: actor.companyId });
+    }
   } finally {
     await unlockConversation(conversation.id).catch(() => undefined);
     stream.send({ type: "done", usage: await usage(actor.companyId).catch(() => null) });

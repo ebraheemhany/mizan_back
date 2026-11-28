@@ -15,6 +15,9 @@ import { createCreditNote, creditNoteSchema, deleteCreditNote } from "./credit-n
 import { parseId } from "../../lib/params.js";
 import { publicPaymentOptions } from "../collections/collections.service.js";
 import { notifyPayment } from "../notifications/notices.service.js";
+import { fileName } from "../files/files.service.js";
+import { rawUpload, sendFile } from "../files/files.routes.js";
+import { addAttachment, getAttachment, listAttachments, removeAttachment } from "./attachments.js";
 
 export function createInvoicesRouter(limit: AuthRateLimiters) {
   const router = Router();
@@ -82,6 +85,28 @@ export function createInvoicesRouter(limit: AuthRateLimiters) {
   router.post("/:ref/email", issue, limit.customerEmail, validateBody(emailInvoiceSchema), async (req, res) => {
     const ref = invoices.parseInvoiceRef(req.params.ref);
     res.json({ invoice: await invoices.emailInvoice(req.user!, ref, req.body) });
+  });
+
+  // Files attached to the invoice (purchase order, delivery note...): everyone who sees the
+  // invoice sees them; adding and removing is for whoever issues invoices. PUT adds one (the
+  // file is the body, its name in X-File-Name), like the app's other uploads.
+  router.get("/:ref/attachments", async (req, res) => {
+    res.json({ attachments: await listAttachments(req.user!.companyId, invoices.parseInvoiceRef(req.params.ref)) });
+  });
+
+  router.put("/:ref/attachments", issue, rawUpload, async (req, res) => {
+    const ref = invoices.parseInvoiceRef(req.params.ref);
+    res.status(201).json({ attachment: await addAttachment(req.user!, ref, req.body, fileName(req.get("x-file-name"))) });
+  });
+
+  router.get("/:ref/attachments/:id", async (req, res) => {
+    const ref = invoices.parseInvoiceRef(req.params.ref);
+    sendFile(res, await getAttachment(req.user!.companyId, ref, parseId(req.params.id, "Attachment")));
+  });
+
+  router.delete("/:ref/attachments/:id", issue, async (req, res) => {
+    await removeAttachment(req.user!, invoices.parseInvoiceRef(req.params.ref), parseId(req.params.id, "Attachment"));
+    res.status(204).end();
   });
 
   router.post("/:ref/reminders", issue, limit.customerEmail, validateBody(reminderSchema), async (req, res) => {

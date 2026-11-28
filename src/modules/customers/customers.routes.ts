@@ -1,18 +1,21 @@
 import { Router } from "express";
 import { parseId } from "../../lib/params.js";
 import { authenticate, requirePermission } from "../../middleware/auth.js";
+import type { AuthRateLimiters } from "../../middleware/rate-limit.js";
 import { parseQuery, validateBody } from "../../middleware/validate.js";
 import {
   bulkAssignSchema,
   bulkDeleteSchema,
+  bulkRemindSchema,
   createCustomerSchema,
   importCustomersSchema,
   listCustomersQuerySchema,
   updateCustomerSchema,
 } from "./customers.schemas.js";
 import * as customers from "./customers.service.js";
+import { remindCustomers } from "../invoices/invoices.service.js";
 
-export function createCustomersRouter() {
+export function createCustomersRouter(limit: AuthRateLimiters) {
   const router = Router();
   router.use(authenticate);
 
@@ -46,6 +49,11 @@ export function createCustomersRouter() {
 
   router.post("/bulk-assign", edit, validateBody(bulkAssignSchema), async (req, res) => {
     res.json(await customers.bulkAssignCustomers(req.user!.companyId, req.body.ids, req.body.assignedToId));
+  });
+
+  // Reminds the selected customers of their unpaid invoices by email: for whoever issues invoices.
+  router.post("/bulk-remind", requirePermission("issueInvoices"), limit.customerEmail, validateBody(bulkRemindSchema), async (req, res) => {
+    res.json(await remindCustomers(req.user!, req.body.ids, req.body.locale));
   });
 
   router.post("/bulk-delete", remove, validateBody(bulkDeleteSchema), async (req, res) => {

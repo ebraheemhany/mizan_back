@@ -128,6 +128,7 @@ model Company {
   stockMovements    StockMovement[]
   assistantChats    AssistantConversation[]
   assistantUsage    AssistantUsage[]
+  invoiceAttachments InvoiceAttachment[]
 
   @@map("companies")
 }
@@ -482,6 +483,7 @@ model Invoice {
   creditNotes    CreditNote[]
   stockMovements StockMovement[]
   etaSubmissions EtaSubmission[]
+  attachments    InvoiceAttachment[]
   // The accepted quote this invoice was made from, if any.
   quote          Quote?
 
@@ -1090,6 +1092,8 @@ enum FileKind {
   receipt
   // On an employee's file (contract, ID...).
   document
+  // Attached to an invoice (the purchase order, a delivery note, a signed copy...).
+  attachment
 }
 
 model StoredFile {
@@ -1113,6 +1117,7 @@ model StoredFile {
   claimReceiptOf PaymentClaim?     @relation("ClaimReceipt")
   proofOf        InvoicePayment?   @relation("PaymentProof")
   documentOf     EmployeeDocument? @relation("EmployeeDocumentFile")
+  attachmentOf   InvoiceAttachment? @relation("InvoiceAttachmentFile")
 
   @@index([companyId])
   @@map("files")
@@ -1737,6 +1742,10 @@ model AssistantUsage {
   cacheReadTokens  Int      @default(0)
   cacheWriteTokens Int      @default(0)
   outputTokens     Int      @default(0)
+  // Today's messages (the plan's daily share, so one company can't use up the free model
+  // for everyone): the day they count for (Cairo) and how many.
+  day              String?
+  dayMessages      Int      @default(0)
   updatedAt        DateTime @updatedAt @db.Timestamptz(3)
 
   companyId String
@@ -1849,4 +1858,21 @@ model EtaSubmission {
   @@index([creditNoteId, submittedAt])
   @@index([companyId, status])
   @@map("eta_submissions")
+}
+
+// A file attached to an invoice (purchase order, delivery note, signed copy...). Its file
+// goes with it.
+model InvoiceAttachment {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  fileId    String     @unique
+  file      StoredFile @relation("InvoiceAttachmentFile", fields: [fileId], references: [id], onDelete: Cascade)
+  invoiceId String
+  invoice   Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  companyId String
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_attachments")
 }

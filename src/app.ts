@@ -71,7 +71,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/roles", createRolesRouter());
   app.use("/api/invitations", createInvitationsRouter(limiters));
   app.use("/api/team-members", createDirectoryRouter());
-  app.use("/api/customers", createCustomersRouter());
+  app.use("/api/customers", createCustomersRouter(limiters));
   app.use("/api/products", createProductsRouter());
   app.use("/api/settings", createSettingsRouter());
   app.use("/api/invoices", createInvoicesRouter(limiters));

@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { AppError } from "../lib/errors.js";
+import { reportError } from "../lib/error-alerts.js";
 
 export const notFound: RequestHandler = (req) => {
   throw new AppError(404, "NOT_FOUND", `Route ${req.method} ${req.path} not found`);
@@ -26,5 +27,6 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   }
 
   req.log.error({ err }, "Unhandled error");
+  void reportError(err, { where: `${req.method} ${req.originalUrl.split("?")[0]}`, userId: req.user?.id, companyId: req.user?.companyId });
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Something went wrong" } });
 };

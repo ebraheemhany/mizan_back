@@ -10,6 +10,7 @@ import { acceptClaimSchema, listClaimsQuerySchema, rejectClaimSchema, transferDe
 import {
   bulkAssignSchema,
   bulkDeleteSchema,
+  bulkRemindSchema,
   createCustomerSchema,
   listCustomersQuerySchema,
   updateCustomerSchema,
@@ -93,6 +94,7 @@ const SECTIONS: Section[] = [
       { method: "GET", path: "/api/customers/:id", does: "One customer, with totals." },
       { method: "POST", path: "/api/customers", does: "Add a customer.", body: createCustomerSchema },
       { method: "PATCH", path: "/api/customers/:id", does: "Edit a customer (only the fields sent; null clears one).", body: updateCustomerSchema },
+      { method: "POST", path: "/api/customers/bulk-remind", does: "Email payment reminders for the chosen customers' unpaid invoices (needs issueInvoices; skips ones reminded in the last 3 days).", body: bulkRemindSchema },
       { method: "POST", path: "/api/customers/bulk-assign", does: "Make a team member responsible for customers (null: nobody).", body: bulkAssignSchema },
       { method: "DELETE", path: "/api/customers/:id", does: "Delete a customer." },
       { method: "POST", path: "/api/customers/bulk-delete", does: "Delete several customers.", body: bulkDeleteSchema },
@@ -128,6 +130,8 @@ const SECTIONS: Section[] = [
       { method: "POST", path: "/api/invoices/:ref/payments", does: "Record a payment received on this invoice.", body: recordPaymentSchema },
       { method: "POST", path: "/api/invoices/:ref/credit-notes", does: "A credit note (return, discount after the fact) on an issued invoice.", body: creditNoteSchema },
       { method: "DELETE", path: "/api/invoices/:ref/credit-notes/:id", does: "Take back a credit note (deleteData)." },
+      { method: "GET", path: "/api/invoices/:ref/attachments", does: "Files attached to the invoice (names; uploading them is done on the invoice page)." },
+      { method: "DELETE", path: "/api/invoices/:ref/attachments/:id", does: "Remove a file attached to the invoice." },
       { method: "POST", path: "/api/invoices/:ref/email", does: "Email the issued invoice's link to the customer.", body: emailInvoiceSchema },
       {
         method: "POST",

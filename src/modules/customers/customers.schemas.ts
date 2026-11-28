@@ -53,6 +53,12 @@ const ids = z.array(z.uuid()).min(1).max(500);
 
 export const bulkDeleteSchema = z.object({ ids });
 
+/** Payment reminders by email for the chosen customers' unpaid invoices. */
+export const bulkRemindSchema = z.object({
+  ids: z.array(z.uuid()).min(1).max(200),
+  locale: z.enum(["ar", "en"]).default("ar"),
+});
+
 export const bulkAssignSchema = z.object({
   ids,
   /** null removes the assignment. */

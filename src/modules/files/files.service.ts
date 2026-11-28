@@ -11,6 +11,7 @@ export const FILE_RULES: Record<FileKind, { maxBytes: number; types: readonly st
   logo: { maxBytes: 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp"] },
   receipt: { maxBytes: 5 * 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp", "application/pdf"] },
   document: { maxBytes: 5 * 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp", "application/pdf"] },
+  attachment: { maxBytes: 5 * 1024 * 1024, types: ["image/png", "image/jpeg", "image/webp", "application/pdf"] },
 };
 
 /**

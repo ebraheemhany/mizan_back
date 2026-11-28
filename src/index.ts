@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import { createApp } from "./app.js";
 import { logger } from "./lib/logger.js";
+import { reportError } from "./lib/error-alerts.js";
 import { prisma } from "./lib/prisma.js";
 import { startBillingJob } from "./modules/billing/billing.job.js";
 import { startNoticesJob } from "./modules/notifications/notices.job.js";
@@ -27,6 +28,12 @@ function shutdown(signal: string) {
     process.exit(0);
   });
 }
+
+// A promise nobody caught: logged and emailed to Mizan's staff instead of stopping the server.
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "Unhandled promise rejection");
+  void reportError(reason, { where: "unhandled promise" });
+});
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

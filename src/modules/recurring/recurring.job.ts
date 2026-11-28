@@ -1,4 +1,5 @@
 import { logger } from "../../lib/logger.js";
+import { reportError } from "../../lib/error-alerts.js";
 import { runDueRecurring } from "./recurring.service.js";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -20,6 +21,7 @@ export function startRecurringJob() {
       if (result.templates > 0) logger.info(result, "Recurring invoices run");
     } catch (err) {
       logger.error({ err }, "Recurring invoices run failed");
+      void reportError(err, { where: "job: recurring invoices" });
     } finally {
       running = false;
     }

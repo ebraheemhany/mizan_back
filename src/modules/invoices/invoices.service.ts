@@ -964,6 +964,60 @@ export async function recordReminder(actor: Actor, ref: InvoiceRef, input: Remin
   return getInvoice(actor.companyId, ref);
 }
 
+/** No more emails than this from one "remind the selected customers". */
+export const MAX_BULK_REMINDERS = 100;
+
+/**
+ * Reminds the chosen customers of what they still owe: the plain reminder email, once for
+ * each of their issued, unpaid invoices. An invoice is skipped when the customer has no
+ * email, or when it was emailed or reminded in the last 3 days (like automatic reminders).
+ */
+export async function remindCustomers(actor: Actor, customerIds: string[], locale: Locale) {
+  const sender = await customerMailSender(actor);
+  const quietSince = new Date(Date.now() - 3 * 86_400_000);
+  const rows = await prisma.invoice.findMany({
+    where: { companyId: actor.companyId, customerId: { in: customerIds }, status: { in: OPEN } },
+    orderBy: { dueDate: "asc" },
+    select: {
+      ...mailSelect,
+      customerId: true,
+      events: { where: { type: { in: ["emailed", "reminderSent"] }, createdAt: { gte: quietSince } }, select: { id: true }, take: 1 },
+    },
+  });
+
+  const result = { sent: 0, noEmail: 0, recent: 0, overLimit: 0, customers: new Set<string>() };
+  for (const row of rows) {
+    const to = row.customer.email ?? row.customerEmail;
+    if (!row.publicToken || remainingOf(row).lte(0)) continue;
+    if (!to) {
+      result.noEmail++;
+      continue;
+    }
+    if (row.events.length > 0) {
+      result.recent++;
+      continue;
+    }
+    if (result.sent >= MAX_BULK_REMINDERS) {
+      result.overLimit++;
+      continue;
+    }
+    await sendMail(reminderEmail(locale, to, sender, mailFacts(row, locale)));
+    await prisma.$transaction(async (tx) => {
+      await tx.invoiceEvent.create({ data: { invoiceId: row.id, type: "reminderSent", values: { channel: "email", to }, userId: actor.id } });
+      await audit(tx, actor.companyId, {
+        action: "send",
+        event: "reminderSent",
+        item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+        values: { number: row.number, channel: "email", customer: row.customerName, to },
+      });
+    });
+    result.sent++;
+    result.customers.add(row.customerId);
+  }
+  const { customers, ...counts } = result;
+  return { ...counts, customersReminded: customers.size };
+}
+
 /**
  * An automatic payment reminder (the company turned them on): the same email as a plain
  * manual one, in the history and the log as sent by the system. False when there's no
