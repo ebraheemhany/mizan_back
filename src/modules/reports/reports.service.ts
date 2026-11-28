@@ -4,6 +4,7 @@ import { Decimal, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
+import { stockCostIn } from "../products/stock.js";
 import { creditNoteNumber, paymentNumber } from "../invoices/invoices.service.js";
 import { payrollCostByMonth, withPayroll } from "../payroll/payroll.service.js";
 import { ISSUED_SQL, ISSUED_STATUSES, revenueByMonth } from "./revenue.js";
@@ -101,13 +102,14 @@ export async function summary(companyId: string, periodKey: string | undefined) 
   const firstMonth = `${months[0]}-01`;
   const span = { start: firstMonth < period.previous.start ? firstMonth : period.previous.start, end: period.to };
 
-  const [revenueMonths, expenseOnlyMonths, payrollMonths, byCategory, collected, top] = await Promise.all([
+  const [revenueMonths, expenseOnlyMonths, payrollMonths, byCategory, collected, top, stock] = await Promise.all([
     revenueByMonth(companyId, span),
     expensesByMonth(companyId, span.start),
     payrollCostByMonth(companyId, span.start),
     prisma.expense.groupBy({
       by: ["category"],
-      where: { companyId, date: within(counted(period)) },
+      // Goods bought into stock are inventory: they cost when sold (stock below), not when bought.
+      where: { companyId, date: within(counted(period)), stockMovement: { is: null } },
       _sum: { amount: true, vat: true },
     }),
     // Collected = cleared payments only (a pending cheque isn't money in yet).
@@ -116,6 +118,8 @@ export async function summary(companyId: string, periodKey: string | undefined) 
       _sum: { amount: true },
     }),
     topCustomers(companyId, counted(period)),
+    // What the goods sold in the period cost, and stock lost (damage, counts).
+    stockCostIn(companyId, counted(period)),
   ]);
 
   // Approved payroll is a salaries cost, next to salaries entered as expenses.
@@ -126,7 +130,8 @@ export async function summary(companyId: string, periodKey: string | undefined) 
   const spentOn = (category: ExpenseCategory) => spent.get(category) ?? ZERO;
 
   const revenue = sumMonths(revenueMonths, counted(period));
-  const cost = spentOn("purchases");
+  // The cost of sales: goods sold at their cost, stock lost, and purchases not bought into stock.
+  const cost = spentOn("purchases").plus(stock.sold).plus(stock.lost);
   const operating = EXPENSE_LINES.filter((l) => l.kind === "expense").reduce((sum, l) => sum.plus(spentOn(l.key)), ZERO);
   const expenses = cost.plus(operating);
   const grossProfit = revenue.minus(cost);
@@ -141,6 +146,9 @@ export async function summary(companyId: string, periodKey: string | undefined) 
     currentMonth,
     lines: [
       { key: "salesRevenue", kind: "income", amount: moneyString(revenue) },
+      // Only for companies whose stock has a cost.
+      ...(stock.sold.isZero() ? [] : [{ key: "costOfGoods", kind: "cost", amount: moneyString(stock.sold) }]),
+      ...(stock.lost.isZero() ? [] : [{ key: "stockLoss", kind: "cost", amount: moneyString(stock.lost) }]),
       ...EXPENSE_LINES.map((l) => ({ key: l.key, kind: l.kind, amount: moneyString(spentOn(l.key)) })),
     ],
     revenue: moneyString(revenue),

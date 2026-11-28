@@ -9,6 +9,7 @@ import { assertBooksOpen, checkBooksOpen, lockBooks } from "../ledger/ledger.per
 import { audit } from "../audit/audit.service.js";
 import { revenueByMonth } from "../reports/revenue.js";
 import { supplierFor } from "../suppliers/suppliers.service.js";
+import { stockCostByMonth, undoReceipt } from "../products/stock.js";
 import type { CreateExpenseInput, ListExpensesQuery } from "./expenses.schemas.js";
 
 type Actor = { id: string; companyId: string; role: Role; permissions: readonly Permission[] };
@@ -32,6 +33,7 @@ const expenseSelect = {
   createdAt: true,
   createdById: true,
   receipt: { select: { contentType: true, size: true, name: true } },
+  stockMovement: { select: { productId: true, quantity: true, product: { select: { name: true } } } },
 } satisfies Prisma.ExpenseSelect;
 
 type ExpenseRow = Prisma.ExpenseGetPayload<{ select: typeof expenseSelect }>;
@@ -54,6 +56,10 @@ function toDto(row: ExpenseRow) {
     createdAt: row.createdAt,
     // The attached receipt (GET /api/expenses/:id/receipt); null when there is none.
     receipt: row.receipt,
+    // Goods received with this purchase (it's inventory: a cost only when they're sold).
+    stock: row.stockMovement
+      ? { productId: row.stockMovement.productId, product: row.stockMovement.product.name, quantity: row.stockMovement.quantity.toString() }
+      : null,
   };
 }
 
@@ -116,14 +122,22 @@ export async function exportExpenses(companyId: string, query: ListExpensesQuery
  * due alike (the same rule the expenses page and the dashboard use).
  */
 export async function expensesByMonth(companyId: string, from: string) {
-  const rows = await prisma.$queryRaw<{ month: string; total: Decimal }[]>`
-    -- The cost: what was paid, less the VAT in it (that is claimed back, not spent).
-    SELECT to_char(date_trunc('month', "date"), 'YYYY-MM') AS month, SUM("amount" - "vat") AS total
-    FROM "expenses"
-    WHERE "companyId" = ${companyId}
-      AND "date" >= ${toDate(from)}::date
-    GROUP BY 1`;
-  return new Map(rows.map((r) => [r.month, new Decimal(r.total)]));
+  const [rows, stock] = await Promise.all([
+    prisma.$queryRaw<{ month: string; total: Decimal }[]>`
+      -- The cost: what was paid, less the VAT in it (that is claimed back, not spent). Goods
+      -- bought into stock are inventory: they cost when they're sold (below), not when bought.
+      SELECT to_char(date_trunc('month', e."date"), 'YYYY-MM') AS month, SUM(e."amount" - e."vat") AS total
+      FROM "expenses" e
+      WHERE e."companyId" = ${companyId}
+        AND e."date" >= ${toDate(from)}::date
+        AND NOT EXISTS (SELECT 1 FROM "stock_movements" m WHERE m."expenseId" = e."id")
+      GROUP BY 1`,
+    stockCostByMonth(companyId, from),
+  ]);
+  const out = new Map(rows.map((r) => [r.month, new Decimal(r.total)]));
+  // The cost of goods sold and stock lost, in their months.
+  for (const [month, c] of stock) out.set(month, (out.get(month) ?? ZERO).plus(c.sold).plus(c.lost));
+  return out;
 }
 
 /** Change in percent, or null when there is nothing to compare with. */
@@ -140,7 +154,8 @@ export async function expenseStats(companyId: string) {
     expensesByMonth(companyId, prev.start),
     prisma.expense.groupBy({
       by: ["category"],
-      where: { companyId, date: { gte: toDate(month.start), lte: toDate(month.end) } },
+      // Goods bought into stock aren't a cost of the month (their sales are, as costOfGoods).
+      where: { companyId, date: { gte: toDate(month.start), lte: toDate(month.end) }, stockMovement: { is: null } },
       _sum: { amount: true, vat: true },
     }),
     prisma.expense.aggregate({ where: { companyId, status: "due" }, _sum: { amount: true }, _count: true }),
@@ -155,8 +170,13 @@ export async function expenseStats(companyId: string) {
   const revenue = revenueOfMonth.get(month.start.slice(0, 7)) ?? ZERO;
   const total = byMonth.get(month.start.slice(0, 7)) ?? ZERO;
   const prevTotal = byMonth.get(prev.start.slice(0, 7)) ?? ZERO;
-  const categories = byCategory
-    .map((c) => ({ category: c.category, amount: (c._sum.amount ?? ZERO).minus(c._sum.vat ?? ZERO) }))
+  const stock = (await stockCostByMonth(companyId, month.start)).get(month.start.slice(0, 7));
+  const categories = [
+    ...byCategory.map((c) => ({ category: c.category as string, amount: (c._sum.amount ?? ZERO).minus(c._sum.vat ?? ZERO) })),
+    // What the goods sold this month cost, and stock lost: costs of the month too.
+    ...(stock && !stock.sold.isZero() ? [{ category: "costOfGoods", amount: stock.sold }] : []),
+    ...(stock && !stock.lost.isZero() ? [{ category: "stockLoss", amount: stock.lost }] : []),
+  ]
     // Largest first; equal amounts by category name, so the order never jumps around.
     .sort((a, b) => b.amount.comparedTo(a.amount) || a.category.localeCompare(b.category));
 
@@ -195,8 +215,14 @@ export async function dueExpenses(companyId: string) {
 // ---------------------------------------------------------------------------
 
 export async function createExpense(actor: Actor, input: CreateExpenseInput) {
+  const row = await prisma.$transaction((tx) => addExpense(tx, actor, input));
+  return toDto(row);
+}
+
+/** An expense, inside a transaction (also the purchase that goods received at a cost are). */
+export async function addExpense(tx: Prisma.TransactionClient, actor: { id: string; companyId: string }, input: CreateExpenseInput) {
   const paid = input.status === "paid";
-  const row = await prisma.$transaction(async (tx) => {
+  {
     // It goes into the books on its date, which must be open.
     await assertBooksOpen(tx, actor.companyId, [input.date]);
     // The supplier picked, or the one with the name typed (added to the list if new).
@@ -233,8 +259,7 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
       },
     });
     return created;
-  });
-  return toDto(row);
+  }
 }
 
 /** A due expense has been paid. */
@@ -286,6 +311,8 @@ export async function deleteExpense(actor: Actor, id: string) {
     }
     // Its entries leave the books on their dates, which must be open.
     checkBooksOpen(closedThrough, [toIso(row.date), row.paidOn ? toIso(row.paidOn) : null]);
+    // A purchase of goods received into stock: the receipt is undone with it.
+    await undoReceipt(tx, actor.companyId, row.id, actor.id);
     // deleteMany + count: a delete that lost a race with another one is a 404, not a 500.
     const { count } = await tx.expense.deleteMany({ where: { id: row.id, companyId: actor.companyId } });
     if (count === 0) throw notFound("Expense");

@@ -37,6 +37,12 @@ const fields = {
   // Products only; ignored (stored as null) for services.
   stock: count.optional(),
   lowStockAt: count.optional(),
+  // What one unit costs us (VAT excluded), up to 4 decimals; empty clears it. Products and
+  // services alike (a service's cost is what it takes to deliver, for its margin).
+  cost: z.preprocess(
+    (v) => (typeof v === "number" ? String(v) : typeof v === "string" ? v.trim().replace(/,/g, "") || null : v),
+    z.string().regex(/^\d{1,10}(\.\d{1,4})?$/, "Must be a non-negative number with up to 4 decimals").nullable().optional(),
+  ),
   // E-invoicing (ETA): a GS1 barcode or the company's approved EGS code (EG-<tax no.>-<code>),
   // and the ETA unit (EA, KGM, M...). Empty clears them.
   etaCodeType: z.preprocess((v) => (v === "" ? null : v), z.enum(["GS1", "EGS"]).nullable().optional()),

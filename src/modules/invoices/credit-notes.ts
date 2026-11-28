@@ -132,6 +132,8 @@ export async function createCreditNote(actor: Actor, ref: InvoiceRef, input: Cre
         date: input.date,
         userId: actor.id,
         creditNoteId: note.id,
+        // Back at what they cost when this invoice sold them.
+        costFromInvoice: invoice.id,
       });
     }
     // Checked again in the update itself: nothing credited or refunded beyond the invoice.

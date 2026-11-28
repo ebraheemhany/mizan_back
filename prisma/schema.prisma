@@ -358,6 +358,10 @@ model Product {
   etaCode     String?
   etaUnit     String?
 
+  // What one unit costs us: the weighted average of what's on hand (4 decimals). Null:
+  // not known yet. Each sale takes it out of inventory into the cost of goods sold.
+  cost Decimal? @db.Decimal(14, 4)
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
@@ -621,6 +625,8 @@ model Expense {
   // The VAT in amount (amount is what was paid, VAT included): input VAT, taken off the
   // VAT due. The cost is amount - vat. 0 when there is none.
   vat           Decimal         @default(0) @db.Decimal(14, 2)
+  // Goods received into stock with this purchase: then it's inventory, not a cost.
+  stockMovement StockMovement?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -1673,6 +1679,10 @@ enum StockMovementKind {
   counted
   /// Damaged, lost or used (negative).
   damaged
+  /// The cost changed while stock was on hand: what's on hand is valued again (quantity 0).
+  costed
+  /// The purchase a receipt was recorded with was deleted: the receipt is undone (negative).
+  receiptRemoved
 }
 
 /// Every change to a product's stock, with the balance after it.
@@ -1684,6 +1694,10 @@ model StockMovement {
   quantity Decimal           @db.Decimal(14, 3)
   /// The product's stock right after this movement.
   balance  Decimal           @db.Decimal(14, 3)
+  /// The cost per unit it moved at (null: no cost known).
+  unitCost Decimal?          @db.Decimal(14, 4)
+  /// What it moved in or out of inventory's value, signed (+ in, - out); null: no cost known.
+  value    Decimal?          @db.Decimal(14, 2)
   note     String?
 
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
@@ -1697,6 +1711,9 @@ model StockMovement {
   invoice      Invoice?    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   creditNoteId String?
   creditNote   CreditNote? @relation(fields: [creditNoteId], references: [id], onDelete: SetNull)
+  /// Goods received at a cost: the purchase (an expense) they were recorded with.
+  expenseId    String?     @unique
+  expense      Expense?    @relation(fields: [expenseId], references: [id], onDelete: SetNull)
 
   @@index([productId, createdAt])
   @@index([companyId, createdAt])

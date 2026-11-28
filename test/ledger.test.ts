@@ -95,13 +95,14 @@ describe("chart of accounts", () => {
   it("a new company gets the built-in chart, every balance at zero", async () => {
     const { token } = await ownerSession();
     const { accounts } = await ok<{ accounts: Account[] }>(await get(token, "/accounts"));
-    // 21 for invoicing and expenses, 4 for payroll (advances, salaries payable, insurance, tax).
-    expect(accounts).toHaveLength(26);
+    // 21 for invoicing and expenses, 4 for payroll (advances, salaries payable, insurance, tax),
+    // 3 for inventory (inventory, cost of goods sold, stock loss).
+    expect(accounts).toHaveLength(29);
     expect(accounts.map((a) => a.code)).toEqual([...accounts.map((a) => a.code)].sort());
     expect(accounts.slice(0, 5).map((a) => a.key)).toEqual(["cashbox", "bank", "wallet", "cheques", "customers"]);
     expect(accounts.every((a) => a.system && a.balance === "0.00")).toBe(true);
     // A second read doesn't add them again.
-    expect((await ok<{ accounts: Account[] }>(await get(token, "/accounts"))).accounts).toHaveLength(26);
+    expect((await ok<{ accounts: Account[] }>(await get(token, "/accounts"))).accounts).toHaveLength(29);
   });
 
   it("added accounts: renamed, codes unique, built-in ones untouchable, removed only while unused", async () => {

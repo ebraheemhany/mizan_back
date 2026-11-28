@@ -16,6 +16,8 @@ export const SYSTEM_ACCOUNTS = [
   // Salary advances, owed back by the employees (taken off their pay).
   { key: "employeeAdvances", code: "1160", type: "asset" },
   // VAT paid on purchases (input VAT): taken off the VAT owed on sales when filing.
+  // Goods on hand, at their cost (stock movements with a cost, ledger.sql "stock").
+  { key: "inventory", code: "1150", type: "asset" },
   { key: "vatInput", code: "1170", type: "asset" },
   { key: "fixedAssets", code: "1500", type: "asset" },
   // Expenses saved as due, until they are paid.
@@ -34,6 +36,9 @@ export const SYSTEM_ACCOUNTS = [
   { key: "otherIncome", code: "4900", type: "revenue" },
   // Purchases are the cost of sales (same as the profit and loss report).
   { key: "purchases", code: "5000", type: "expense" },
+  // What the goods sold cost, and stock lost (damage, counts; a gain lowers it).
+  { key: "cogs", code: "5010", type: "expense" },
+  { key: "stockLoss", code: "5020", type: "expense" },
   { key: "salaries", code: "5100", type: "expense" },
   { key: "rent", code: "5200", type: "expense" },
   { key: "marketing", code: "5300", type: "expense" },

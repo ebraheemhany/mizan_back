@@ -6,7 +6,7 @@ import { prisma } from "../../lib/prisma.js";
 import { audit, changedFields } from "../audit/audit.service.js";
 import { businessToday } from "../../lib/dates.js";
 import { Decimal } from "../../lib/money.js";
-import { moveStock, stockNumber } from "./stock.js";
+import { costString, moveStock, openStock, setCost, stockNumber } from "./stock.js";
 import {
   createProductSchema,
   type CreateProductInput,
@@ -29,6 +29,7 @@ const productSelect = {
   etaCodeType: true,
   etaCode: true,
   etaUnit: true,
+  cost: true,
   createdAt: true,
 } satisfies Prisma.ProductSelect;
 
@@ -42,6 +43,7 @@ function toDto(row: ProductRow) {
     taxRate: row.taxRate.toFixed(2),
     stock: stockNumber(row.stock),
     lowStockAt: stockNumber(row.lowStockAt),
+    cost: costString(row.cost),
     // How many invoices and quotes use it; counted once invoices exist.
     usageCount: 0,
   };
@@ -159,13 +161,12 @@ export async function createProduct(companyId: string, input: CreateProductInput
         },
         select: { id: true },
       });
-      // What's on hand when it's added opens its stock log.
+      // What's on hand when it's added opens its stock log, at its cost when given.
+      const cost = input.cost ? new Decimal(input.cost) : null;
       if (input.type === "product" && input.stock !== undefined) {
-        await moveStock(tx, companyId, [{ productId: created.id, quantity: input.stock }], 1, {
-          kind: "opening",
-          date: businessToday(),
-          userId,
-        });
+        await openStock(tx, companyId, created.id, input.stock, cost, userId);
+      } else if (cost) {
+        await tx.product.update({ where: { id: created.id }, data: { cost } });
       }
       const row = await tx.product.findUniqueOrThrow({ where: { id: created.id }, select: productSelect });
       await audit(tx, companyId, {
@@ -222,6 +223,11 @@ export async function updateProduct(companyId: string, id: string, input: Update
             userId,
           });
         }
+      }
+      // A new cost: what's on hand is valued at it from now on (null clears it).
+      if (input.cost !== undefined) {
+        if (input.cost === null) await tx.product.update({ where: { id }, data: { cost: null } });
+        else await setCost(tx, companyId, id, new Decimal(input.cost), userId);
       }
       const updated = await tx.product.findUniqueOrThrow({ where: { id }, select: productSelect });
       const fields = changedFields(existing as Record<string, unknown>, input as Record<string, unknown>);
@@ -314,12 +320,12 @@ export async function importProducts(companyId: string, rows: unknown[], userId:
         select: { id: true, code: true },
       });
       // Each product's quantity in the file opens its stock log.
-      const stockByCode = new Map(valid.map((p) => [p.code, p.type === "product" ? p.stock : undefined]));
-      const date = businessToday();
+      const byCode = new Map(valid.map((p) => [p.code, p]));
       for (const row of rows) {
-        const quantity = stockByCode.get(row.code);
-        if (quantity === undefined) continue;
-        await moveStock(tx, companyId, [{ productId: row.id, quantity }], 1, { kind: "opening", date, userId });
+        const p = byCode.get(row.code)!;
+        const cost = p.cost ? new Decimal(p.cost) : null;
+        if (p.type === "product" && p.stock !== undefined) await openStock(tx, companyId, row.id, p.stock, cost, userId);
+        else if (cost) await tx.product.update({ where: { id: row.id }, data: { cost } });
       }
       const created = { count: rows.length };
       await audit(tx, companyId, {

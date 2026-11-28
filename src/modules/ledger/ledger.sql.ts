@@ -26,6 +26,14 @@ import { Prisma } from "../../generated/prisma/client.js";
  *   payrollPayment  a paid month, on the day it was paid: Dr salaries payable / Cr where each
  *                   employee was paid from
  *   advance         an advance paid to an employee: Dr employee advances / Cr where it came from
+ *   stockSold       goods sold leave inventory at their cost (on the sale's date): Dr cost of goods
+ *                   sold / Cr inventory; a cancelled sale or a return the other way
+ *   stockLoss       stock damaged, or a count short: Dr stock loss / Cr inventory (a count over:
+ *                   the other way)
+ *   stockValue      opening stock, or what's on hand valued at a new cost: Dr inventory / Cr capital
+ *                   (or the other way when it's worth less)
+ *   A purchase of goods received into stock (an expense with a receipt movement) is inventory:
+ *   Dr inventory instead of its category.
  *
  * Drafts and cancelled invoices make no entry (same rule as the reports).
  */
@@ -40,7 +48,10 @@ export type AutoSource =
   | "expensePayment"
   | "payroll"
   | "payrollPayment"
-  | "advance";
+  | "advance"
+  | "stockSold"
+  | "stockLoss"
+  | "stockValue";
 export type EntrySource = AutoSource | "manual";
 
 /** Where a customer's payment went in: the account picked on it, else by method. */
@@ -66,6 +77,16 @@ export const itemCost = Prisma.raw(
   `(it."baseSalary" + it."allowances" + it."bonus" + it."overtime" - it."absenceDeduction" - it."otherDeductions" + it."employerInsurance")`,
 );
 const PAYROLL_POSTED = Prisma.raw(`('approved', 'paid')`);
+/** A stock movement's entry: sales (and their reversals), stock lost or found, or value set. */
+const STOCK_SOURCE = Prisma.raw(
+  `(CASE WHEN m."kind"::text IN ('sale', 'saleCancelled', 'returned', 'returnRemoved') THEN 'stockSold'
+         WHEN m."kind"::text IN ('counted', 'damaged') THEN 'stockLoss' ELSE 'stockValue' END)`,
+);
+/** The account on the other side of inventory for a stock movement. */
+const STOCK_OTHER = Prisma.raw(
+  `(CASE WHEN m."kind"::text IN ('sale', 'saleCancelled', 'returned', 'returnRemoved') THEN 'cogs'
+         WHEN m."kind"::text IN ('counted', 'damaged') THEN 'stockLoss' ELSE 'capital' END)`,
+);
 
 /** Every line of every automatic entry: source, entryId, date, key (built-in account), debit, credit, position. */
 export function autoLines(companyId: string) {
@@ -129,7 +150,8 @@ export function autoLines(companyId: string) {
     SELECT 'expense', e."id", e."date", l."key", l."debit", l."credit", l."position"
     FROM "expenses" e
     CROSS JOIN LATERAL (VALUES
-      (e."category"::text, e."amount" - e."vat", 0::numeric, 0),
+      (CASE WHEN EXISTS (SELECT 1 FROM "stock_movements" sm WHERE sm."expenseId" = e."id") THEN 'inventory' ELSE e."category"::text END,
+       e."amount" - e."vat", 0::numeric, 0),
       ('vatInput', e."vat", 0::numeric, 1),
       (CASE WHEN e."paidOn" = e."date" THEN ${paidFrom} ELSE 'suppliers' END, 0::numeric, e."amount", 2)
     ) ${LINE}
@@ -188,7 +210,19 @@ export function autoLines(companyId: string) {
       ('employeeAdvances'::text, a."amount", 0::numeric, 0),
       (a."paidFrom"::text, 0::numeric, a."amount", 1)
     ) ${LINE}
-    WHERE a."companyId" = ${companyId}`;
+    WHERE a."companyId" = ${companyId}
+
+    UNION ALL
+    SELECT ${STOCK_SOURCE}, m."id", m."date", l."key", l."debit", l."credit", l."position"
+    FROM "stock_movements" m
+    CROSS JOIN LATERAL (SELECT ${STOCK_OTHER} AS "other") k
+    CROSS JOIN LATERAL (VALUES
+      (CASE WHEN m."value" > 0 THEN 'inventory' ELSE k."other" END, ABS(m."value"), 0::numeric, 0),
+      (CASE WHEN m."value" > 0 THEN k."other" ELSE 'inventory' END, 0::numeric, ABS(m."value"), 1)
+    ) ${LINE}
+    WHERE m."companyId" = ${companyId} AND m."value" IS NOT NULL AND m."value" <> 0
+      -- Goods received (and undone) go into the books as their purchase.
+      AND m."kind"::text NOT IN ('received', 'receiptRemoved')`;
 }
 
 /**
@@ -263,6 +297,12 @@ export function entryHeaders(companyId: string) {
     SELECT 'advance', a."id", a."date", a."createdAt", 'posted', a."amount", emp."name" || ' ' || COALESCE(a."note", '')
     FROM "employee_advances" a JOIN "employees" emp ON emp."id" = a."employeeId"
     WHERE a."companyId" = ${companyId}
+
+    UNION ALL
+    SELECT ${STOCK_SOURCE}, m."id", m."date", m."createdAt", 'posted', ABS(m."value"), p."name"
+    FROM "stock_movements" m JOIN "products" p ON p."id" = m."productId"
+    WHERE m."companyId" = ${companyId} AND m."value" IS NOT NULL AND m."value" <> 0
+      AND m."kind"::text NOT IN ('received', 'receiptRemoved')
 
     UNION ALL
     SELECT 'manual', j."id", j."date", j."createdAt", j."status"::text,

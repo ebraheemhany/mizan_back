@@ -201,6 +201,7 @@ const SOURCES: Record<Exclude<ListEntriesQuery["source"], "all">, EntrySource[]>
   payment: ["payment", "chequeCleared", "chequeBounced"],
   expense: ["expense", "expensePayment"],
   payroll: ["payroll", "payrollPayment", "advance"],
+  stock: ["stockSold", "stockLoss", "stockValue"],
   manual: ["manual"],
 };
 
@@ -243,7 +244,7 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
   const idsOf = (...sources: EntrySource[]) => rows.filter((r) => sources.includes(r.source)).map((r) => r.entryId);
   const autoIds = [...new Set(rows.filter((r) => r.source !== "manual").map((r) => r.entryId))];
 
-  const [lines, invoices, payments, expenses, manual, runs, advances, creditNotes] = await Promise.all([
+  const [lines, invoices, payments, expenses, manual, runs, advances, creditNotes, movements] = await Promise.all([
     autoIds.length
       ? prisma.$queryRaw<{ source: EntrySource; entryId: string; key: string; debit: Decimal; credit: Decimal }[]>`
           SELECT x."source", x."entryId", x."key", x."debit", x."credit"
@@ -289,8 +290,19 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
       where: { companyId, id: { in: idsOf("creditNote", "creditNoteRefund") } },
       select: { id: true, number: true, invoice: { select: { number: true, numberPrefix: true, customerName: true } } },
     }),
+    prisma.stockMovement.findMany({
+      where: { companyId, id: { in: idsOf("stockSold", "stockLoss", "stockValue") } },
+      select: {
+        id: true,
+        kind: true,
+        product: { select: { name: true } },
+        invoice: { select: { number: true, numberPrefix: true, customerName: true } },
+        creditNote: { select: { number: true, invoice: { select: { number: true, numberPrefix: true, customerName: true } } } },
+      },
+    }),
   ]);
   const creditNoteById = new Map(creditNotes.map((c) => [c.id, c]));
+  const movementById = new Map(movements.map((m) => [m.id, m]));
 
   const accounts = new Map(chart.map((a) => [a.id, a]));
   const byKey = idsByKey(chart);
@@ -367,6 +379,20 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
     if (r.source === "payroll" || r.source === "payrollPayment") {
       const run = runById.get(r.entryId);
       return { ...base, month: run ? toIso(run.month).slice(0, 7) : null, lines: own };
+    }
+    if (r.source === "stockSold" || r.source === "stockLoss" || r.source === "stockValue") {
+      // The product, and the invoice (or credit note on one) it moved with.
+      const m = movementById.get(r.entryId);
+      const inv = m?.invoice ?? m?.creditNote?.invoice ?? null;
+      return {
+        ...base,
+        memo: m?.product.name ?? null,
+        ref: m?.creditNote ? creditNoteNumber(m.creditNote.number) : inv ? invoiceRef(inv).displayNumber : null,
+        party: inv?.customerName ?? null,
+        invoice: inv ? invoiceRef(inv) : null,
+        category: m?.kind ?? null,
+        lines: own,
+      };
     }
     if (r.source === "advance") {
       const a = advanceById.get(r.entryId);
