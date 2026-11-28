@@ -1,7 +1,6 @@
-import type { Role } from "../../generated/prisma/client.js";
 import { businessToday, daysBetween, monthRange, toDate, toIso } from "../../lib/dates.js";
 import { moneyString, ZERO } from "../../lib/money.js";
-import { can } from "../../lib/permissions.js";
+import { can, type Permission } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { invoicesMadeThisMonth } from "../billing/plans.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
@@ -15,7 +14,7 @@ const ATTENTION_LIMIT = 5;
 /** Deals with no activity for STALE_DAYS days or more, the longest-quiet first. */
 const STALE_DEALS_LIMIT = 3;
 
-export async function dashboard(companyId: string, role: Role) {
+export async function dashboard(companyId: string, user: { permissions: readonly Permission[] }) {
   const today = businessToday();
   const thisMonth = monthRange(today);
 
@@ -78,7 +77,7 @@ export async function dashboard(companyId: string, role: Role) {
   const receivable = { outstanding: stats.outstanding, overdue: stats.overdue };
 
   // Revenue and profit are for the roles that may see financial reports.
-  if (!can(role, "reports")) {
+  if (!can(user, "reports")) {
     return { financials: null, receivable, attention, invoicesThisMonth };
   }
 

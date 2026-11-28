@@ -3,11 +3,11 @@ import { addDays, businessToday, toDate, toIso } from "../../lib/dates.js";
 import { AppError } from "../../lib/errors.js";
 import { withoutUndefined } from "../../lib/object.js";
 import { notFound } from "../../lib/params.js";
-import { can } from "../../lib/permissions.js";
+import { can, type Permission } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import type { CreateTaskInput, UpdateTaskInput } from "./tasks.schemas.js";
 
-type Actor = { id: string; companyId: string; role: Role };
+type Actor = { id: string; companyId: string; role: Role; permissions: readonly Permission[] };
 
 /** Done tasks stay in the list for this many days after the day they were done. */
 export const DONE_VISIBLE_DAYS = 60;
@@ -193,7 +193,7 @@ export async function deleteTask(actor: Actor, id: string) {
   });
   if (!row) throw notFound("Task");
 
-  if (!can(actor.role, "deleteData") && row.createdById !== actor.id) {
+  if (!can(actor, "deleteData") && row.createdById !== actor.id) {
     throw new AppError(403, "FORBIDDEN", "Only the owner or the person who added a task can delete it");
   }
   // deleteMany + count: a delete that lost a race with another one is a 404, not a 500.

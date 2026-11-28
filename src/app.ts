@@ -36,6 +36,7 @@ import {
   createPublicPaymentRouter,
 } from "./modules/collections/collections.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
+import { createRolesRouter } from "./modules/roles/roles.routes.js";
 
 type AppOptions = {
   /** Turn rate limiting off (used by tests that make many requests from one IP). */
@@ -64,6 +65,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   const limiters = createAuthRateLimiters(rateLimit);
   app.use("/api/auth", createAuthRouter(limiters));
   app.use("/api/users", createUsersRouter());
+  // The owner's own roles (name + permissions) for team members.
+  app.use("/api/roles", createRolesRouter());
   app.use("/api/invitations", createInvitationsRouter(limiters));
   app.use("/api/team-members", createDirectoryRouter());
   app.use("/api/customers", createCustomersRouter());

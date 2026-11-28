@@ -13,7 +13,7 @@ import {
 import { AppError } from "../../lib/errors.js";
 import { Decimal, invoiceTotals, moneyString, ZERO, type LineInput } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
-import { can } from "../../lib/permissions.js";
+import { can, type Permission } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { sendMail } from "../../lib/mailer.js";
 import { audit } from "../audit/audit.service.js";
@@ -28,7 +28,7 @@ import type {
   UpdateQuoteInput,
 } from "./quotes.schemas.js";
 
-type Actor = { id: string; companyId: string; role: Role };
+type Actor = { id: string; companyId: string; role: Role; permissions: readonly Permission[] };
 type Tx = Prisma.TransactionClient;
 
 /** How far ahead "expiring soon" looks on the stats cards. */
@@ -817,7 +817,7 @@ export async function deleteQuote(actor: Actor, ref: QuoteRef) {
     total: true,
     customerName: true,
   });
-  const owner = can(actor.role, "deleteData");
+  const owner = can(actor, "deleteData");
 
   // One statement with every condition, so a quote sent or converted at the same
   // moment isn't deleted by someone who no longer may.

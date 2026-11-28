@@ -14,6 +14,27 @@ enum Role {
   accountant
   sales
   viewer
+  // A role the owner made (User.customRole): its permissions are the ones picked there.
+  custom
+}
+
+// A role the company's owner made, with a name and the permissions they picked (the keys
+// of src/lib/permissions.ts). Members and invitations point at it while role = custom.
+model CompanyRole {
+  id          String   @id @default(uuid())
+  name        String
+  permissions String[] @default([])
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  users       User[]
+  invitations Invitation[]
+
+  @@unique([companyId, name])
+  @@map("company_roles")
 }
 
 model Company {
@@ -83,6 +104,7 @@ model Company {
   files             StoredFile[]       @relation("CompanyFiles")
   journalEntries    JournalEntry[]
   users             User[]
+  customRoles       CompanyRole[]
   invitations       Invitation[]
   customers         Customer[]
   products          Product[]
@@ -141,6 +163,10 @@ model User {
   // Google's id for the account ("sub"), once the user has signed in with Google.
   googleId          String?   @unique
   role              Role      @default(viewer)
+  // The owner's own role for this member, while role = custom. NoAction (checked at the end
+  // of the statement) so deleting a whole company still works; a role in use can't be deleted.
+  customRoleId      String?
+  customRole        CompanyRole? @relation(fields: [customRoleId], references: [id], onDelete: NoAction)
   // Access tokens issued before this moment are rejected (set on password change).
   passwordChangedAt DateTime? @db.Timestamptz(3)
   // When the user opened the link sent to this address (or reset the password through it).
@@ -172,6 +198,7 @@ model User {
   reviewedClaims    PaymentClaim[]
 
   @@index([companyId])
+  @@index([customRoleId])
   @@map("users")
 }
 
@@ -222,6 +249,9 @@ model Invitation {
   email      String
   name       String
   role       Role
+  // The owner's own role, while role = custom (the person joins with it).
+  customRoleId String?
+  customRole   CompanyRole? @relation(fields: [customRoleId], references: [id], onDelete: NoAction)
   tokenHash  String    @unique
   expiresAt  DateTime  @db.Timestamptz(3)
   acceptedAt DateTime? @db.Timestamptz(3)

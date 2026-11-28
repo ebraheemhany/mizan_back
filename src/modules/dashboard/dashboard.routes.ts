@@ -5,7 +5,7 @@ import { dashboard } from "./dashboard.service.js";
 export function createDashboardRouter() {
   const router = Router();
   router.get("/", authenticate, async (req, res) => {
-    res.json(await dashboard(req.user!.companyId, req.user!.role));
+    res.json(await dashboard(req.user!.companyId, req.user!));
   });
   return router;
 }

@@ -3,12 +3,12 @@ import { addDays, businessToday, daysBetween, toDate, toIso } from "../../lib/da
 import { AppError } from "../../lib/errors.js";
 import { money, moneyString } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
-import { can } from "../../lib/permissions.js";
+import { can, type Permission } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit, changedFields } from "../audit/audit.service.js";
 import type { CreateDealInput, DealStageValue, LoseDealInput, UpdateDealInput } from "./deals.schemas.js";
 
-type Actor = { id: string; companyId: string; role: Role };
+type Actor = { id: string; companyId: string; role: Role; permissions: readonly Permission[] };
 type Tx = Prisma.TransactionClient;
 
 /** Days without any activity before an open deal is flagged on the board. */
@@ -343,7 +343,7 @@ export async function touchDeal(actor: Actor, id: string, awaitingReply: boolean
 export async function deleteDeal(actor: Actor, id: string) {
   await prisma.$transaction(async (tx) => {
     const row = await findDeal(tx, actor.companyId, id);
-    if (row.stage === "won" && !row.lostOn && !can(actor.role, "deleteData")) {
+    if (row.stage === "won" && !row.lostOn && !can(actor, "deleteData")) {
       throw new AppError(403, "FORBIDDEN", "Only the owner can delete a won deal");
     }
     const { count } = await tx.deal.deleteMany({ where: { id, companyId: actor.companyId } });

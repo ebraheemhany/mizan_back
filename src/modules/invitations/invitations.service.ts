@@ -11,6 +11,7 @@ import { checkUserLimit } from "../billing/plans.js";
 import { sendVerificationLater } from "../auth/account-links.service.js";
 import { invitationEmail, type Locale } from "../email/templates.js";
 import type { GoogleProfile } from "../../lib/google-id.js";
+import { findRole } from "../roles/roles.service.js";
 import { sessionUserSelect, toSessionUser } from "../users/public-user.js";
 import type { AcceptInvitationInput, CreateInvitationInput } from "./invitations.schemas.js";
 
@@ -21,10 +22,14 @@ const invitationSelect = {
   email: true,
   name: true,
   role: true,
+  customRole: { select: { id: true, name: true } },
   expiresAt: true,
   createdAt: true,
   invitedBy: { select: { id: true, fullName: true } },
 } satisfies Prisma.InvitationSelect;
+
+/** How a role reads in the log and the email: a built-in role's key, or a custom role's name. */
+const roleWord = (role: string, custom?: { name: string } | null) => (role === "custom" ? (custom?.name ?? role) : role);
 
 /** Not accepted, not revoked, not expired. */
 const pending = () => ({ acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } });
@@ -55,12 +60,15 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
       data: { revokedAt: new Date() },
     });
     await checkUserLimit(tx, inviter.companyId);
+    // One of this company's own roles, when it's a custom one.
+    const custom = input.role === "custom" ? await findRole(tx, inviter.companyId, input.customRoleId!) : null;
 
     const created = await tx.invitation.create({
       data: {
         email: input.email,
         name: input.name,
         role: input.role,
+        customRoleId: custom?.id ?? null,
         tokenHash: hashToken(token),
         expiresAt: new Date(Date.now() + config.INVITATION_TTL_DAYS * DAY_MS),
         companyId: inviter.companyId,
@@ -72,7 +80,7 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
       action: "permissions",
       event: "userInvited",
       item: { type: "user", ref: input.name },
-      values: { role: input.role, email: input.email },
+      values: { role: roleWord(input.role, created.customRole), email: input.email },
     });
     return created;
   });
@@ -88,7 +96,7 @@ export async function createInvitation(inviter: Inviter, input: CreateInvitation
     invitationEmail(input.locale, {
       email: input.email,
       name: input.name,
-      role: input.role,
+      role: roleWord(input.role, invitation.customRole),
       inviter: sender.fullName,
       company: sender.company.name,
       url,
@@ -110,7 +118,10 @@ export function listPendingInvitations(companyId: string) {
 
 export async function revokeInvitation(companyId: string, id: string) {
   await prisma.$transaction(async (tx) => {
-    const invitation = await tx.invitation.findFirst({ where: { id, companyId }, select: { name: true, email: true, role: true } });
+    const invitation = await tx.invitation.findFirst({
+      where: { id, companyId },
+      select: { name: true, email: true, role: true, customRole: { select: { name: true } } },
+    });
     const { count } = await tx.invitation.updateMany({
       where: { id, companyId, acceptedAt: null, revokedAt: null },
       data: { revokedAt: new Date() },
@@ -120,7 +131,7 @@ export async function revokeInvitation(companyId: string, id: string) {
       action: "permissions",
       event: "inviteRevoked",
       item: { type: "user", ref: invitation.name },
-      values: { role: invitation.role, email: invitation.email },
+      values: { role: roleWord(invitation.role, invitation.customRole), email: invitation.email },
     });
   });
 }
@@ -129,7 +140,14 @@ export async function revokeInvitation(companyId: string, id: string) {
 export async function previewInvitation(token: string) {
   const invitation = await prisma.invitation.findFirst({
     where: { tokenHash: hashToken(token), ...pending() },
-    select: { email: true, name: true, role: true, expiresAt: true, company: { select: { name: true } } },
+    select: {
+      email: true,
+      name: true,
+      role: true,
+      customRole: { select: { name: true } },
+      expiresAt: true,
+      company: { select: { name: true } },
+    },
   });
   if (!invitation) throw invalidInvitation();
   return invitation;
@@ -185,13 +203,17 @@ async function joinCompany(invitationId: string, member: (invitation: { name: st
       });
       if (count === 0) throw invalidInvitation();
 
-      const invitation = await tx.invitation.findUniqueOrThrow({ where: { id: invitationId } });
+      const invitation = await tx.invitation.findUniqueOrThrow({
+        where: { id: invitationId },
+        include: { customRole: { select: { name: true } } },
+      });
 
       const created = await tx.user.create({
         data: {
           email: invitation.email,
           ...member(invitation),
           role: invitation.role,
+          customRoleId: invitation.customRoleId,
           companyId: invitation.companyId,
         },
         select: sessionUserSelect,
@@ -204,7 +226,7 @@ async function joinCompany(invitationId: string, member: (invitation: { name: st
           action: "permissions",
           event: "memberJoined",
           item: { type: "user", id: user.id, ref: user.fullName },
-          values: { role: user.role },
+          values: { role: roleWord(user.role, invitation.customRole) },
         },
         { id: user.id, name: user.fullName },
       );

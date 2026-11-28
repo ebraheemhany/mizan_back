@@ -1,9 +1,11 @@
 import type { Role } from "../generated/prisma/client.js";
 
 /**
- * What each role may do. This is what the API enforces.
+ * What each built-in role may do. This is what the API enforces.
  * The frontend has the same table (lib/auth/permissions.ts) only to hide
  * buttons; keep the two in sync when changing either.
+ * A custom role (role = "custom") has the permissions its owner picked instead
+ * (CompanyRole.permissions), so it appears in none of these lists.
  */
 const PERMISSIONS = {
   viewCustomers: ["owner", "accountant", "sales", "viewer"],
@@ -37,6 +39,21 @@ const PERMISSIONS = {
 
 export type Permission = keyof typeof PERMISSIONS;
 
-export function can(role: Role, permission: Permission) {
-  return (PERMISSIONS[permission] as readonly Role[]).includes(role);
+/** Every permission there is, in a fixed order (what a custom role picks from). */
+export const PERMISSION_KEYS = Object.keys(PERMISSIONS) as Permission[];
+
+export const isPermission = (key: string): key is Permission => key in PERMISSIONS;
+
+/**
+ * What someone with this role may do: a built-in role's list, or for a custom role
+ * the permissions its owner picked (unknown keys, e.g. from an older version, ignored).
+ */
+export function permissionsFor(role: Role, custom?: readonly string[] | null): Permission[] {
+  if (role === "custom") return PERMISSION_KEYS.filter((key) => custom?.includes(key));
+  return PERMISSION_KEYS.filter((key) => (PERMISSIONS[key] as readonly Role[]).includes(role));
+}
+
+/** Whether this user may do it (req.user, or an actor built from it). */
+export function can(user: { permissions: readonly Permission[] }, permission: Permission) {
+  return user.permissions.includes(permission);
 }

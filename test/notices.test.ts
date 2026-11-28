@@ -115,6 +115,15 @@ describe("notices to the team", () => {
     const { owner, customer } = await company();
     const accountant = await teamMember(owner.token, "accountant");
     const sales = await teamMember(owner.token, "sales");
+    // Custom roles: one that records payments hears about the money, one for tasks doesn't.
+    const customMember = async (permissions: string[]) => {
+      const role = (await api().post("/api/roles").set(auth(owner.token)).send({ name: permissions.join("+"), permissions }).expect(201)).body.role;
+      const member = await teamMember(owner.token, "viewer");
+      await api().patch(`/api/users/${member.userId}`).set(auth(owner.token)).send({ role: "custom", customRoleId: role.id }).expect(200);
+      return member;
+    };
+    const cashier = await customMember(["viewCustomers", "recordPayments"]);
+    const planner = await customMember(["viewCustomers", "tasks"]);
     await prisma.user.updateMany({ where: { companyId: owner.companyId }, data: { emailVerifiedAt: new Date() } });
     await setNotifications(owner.token, { overdueInvoice: true });
 
@@ -124,15 +133,16 @@ describe("notices to the team", () => {
     await invoiceDue(owner.token, customer.id, addDays(today(), -5), owner.companyId);
     await runNotices(morning());
     const sent = tagged("notice-overdue");
-    expect(sent.map((m) => m.to).sort()).toEqual([accountant.email, owner.email].sort());
+    expect(sent.map((m) => m.to).sort()).toEqual([accountant.email, cashier.email, owner.email].sort());
     expect(sent.map((m) => m.to)).not.toContain(sales.email);
+    expect(sent.map((m) => m.to)).not.toContain(planner.email);
     expect(sent[0]!.text).toContain("متأخرة 5 يوم");
 
     await runNotices(morning());
-    expect(tagged("notice-overdue")).toHaveLength(2);
+    expect(tagged("notice-overdue")).toHaveLength(3);
     // The next day, again.
     await runNotices(morning(addDays(today(), 1)));
-    expect(tagged("notice-overdue")).toHaveLength(4);
+    expect(tagged("notice-overdue")).toHaveLength(6);
   });
 
   it("tasks due today go to whoever made them, in the morning", async () => {

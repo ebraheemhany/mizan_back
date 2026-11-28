@@ -3,7 +3,7 @@ import { businessToday, monthRange, toDate, toIso, yearRange } from "../../lib/d
 import { AppError } from "../../lib/errors.js";
 import { Decimal, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
-import { can } from "../../lib/permissions.js";
+import { can, type Permission } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { assertBooksOpen, checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { audit } from "../audit/audit.service.js";
@@ -11,7 +11,7 @@ import { revenueByMonth } from "../reports/revenue.js";
 import { supplierFor } from "../suppliers/suppliers.service.js";
 import type { CreateExpenseInput, ListExpensesQuery } from "./expenses.schemas.js";
 
-type Actor = { id: string; companyId: string; role: Role };
+type Actor = { id: string; companyId: string; role: Role; permissions: readonly Permission[] };
 const EXPORT_LIMIT = 5000;
 /** The one who added an expense may remove it for this long ("undo"); after that only the owner can. */
 export const UNDO_WINDOW_MS = 15 * 60 * 1000;
@@ -281,7 +281,7 @@ export async function deleteExpense(actor: Actor, id: string) {
     if (!row) throw notFound("Expense");
 
     const isOwnRecent = row.createdById === actor.id && Date.now() - row.createdAt.getTime() <= UNDO_WINDOW_MS;
-    if (!can(actor.role, "deleteData") && !isOwnRecent) {
+    if (!can(actor, "deleteData") && !isOwnRecent) {
       throw new AppError(403, "FORBIDDEN", "Only the owner can delete an expense after it has been saved");
     }
     // Its entries leave the books on their dates, which must be open.

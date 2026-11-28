@@ -12,6 +12,7 @@ import { addDays, BUSINESS_TIME_ZONE, businessToday, daysBetween, toDate, toIso 
 import { logger } from "../../lib/logger.js";
 import { sendMail } from "../../lib/mailer.js";
 import { moneyString, ZERO } from "../../lib/money.js";
+import type { Permission } from "../../lib/permissions.js";
 import { prisma } from "../../lib/prisma.js";
 import { overdueAlertEmail, paymentNoticeEmail, tasksDueEmail, weeklyDigestEmail, type Locale } from "../email/templates.js";
 import { sendAutoReminder } from "../invoices/invoices.service.js";
@@ -66,10 +67,20 @@ async function once(companyId: string, key: string, send: () => Promise<boolean>
   return 0;
 }
 
-/** Team members who handle the money, with a confirmed address (nothing goes to an unconfirmed one). */
+/**
+ * Team members who handle the money, with a confirmed address (nothing goes to an unconfirmed
+ * one): the owner and accountants, and anyone whose own role may record payments.
+ */
 function moneyPeople(companyId: string) {
   return prisma.user.findMany({
-    where: { companyId, role: { in: MONEY_ROLES }, emailVerifiedAt: { not: null } },
+    where: {
+      companyId,
+      emailVerifiedAt: { not: null },
+      OR: [
+        { role: { in: MONEY_ROLES } },
+        { role: "custom", customRole: { permissions: { has: "recordPayments" satisfies Permission } } },
+      ],
+    },
     select: { id: true, email: true, fullName: true },
     orderBy: { createdAt: "asc" },
   });

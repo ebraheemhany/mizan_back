@@ -2,7 +2,8 @@ import { AppError } from "../../lib/errors.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
-import type { InvitableRole } from "./users.schemas.js";
+import { findRole } from "../roles/roles.service.js";
+import type { RoleChoice } from "./users.schemas.js";
 import { teamMemberSelect } from "./public-user.js";
 
 export function listTeam(companyId: string) {
@@ -20,7 +21,7 @@ export function listTeam(companyId: string) {
 async function findManageableUser(companyId: string, userId: string) {
   const user = await prisma.user.findFirst({
     where: { id: userId, companyId },
-    select: { id: true, role: true, fullName: true },
+    select: { id: true, role: true, fullName: true, customRole: { select: { id: true, name: true } } },
   });
   if (!user) throw notFound("User");
   if (user.role === "owner") {
@@ -29,17 +30,25 @@ async function findManageableUser(companyId: string, userId: string) {
   return user;
 }
 
-export async function changeRole(companyId: string, userId: string, role: InvitableRole) {
+/** How a role reads in the activity log: a built-in role's key (the app translates it), or a custom role's name. */
+const roleWord = (role: string, custom?: { name: string } | null) => (role === "custom" ? (custom?.name ?? role) : role);
+
+export async function changeRole(companyId: string, userId: string, choice: RoleChoice) {
   const before = await findManageableUser(companyId, userId);
   // Takes effect on the user's next request: `authenticate` reads the role from the database.
   return prisma.$transaction(async (tx) => {
-    const user = await tx.user.update({ where: { id: userId }, data: { role }, select: teamMemberSelect });
-    if (before.role !== role) {
+    const custom = choice.role === "custom" ? await findRole(tx, companyId, choice.customRoleId!) : null;
+    const user = await tx.user.update({
+      where: { id: userId },
+      data: { role: choice.role, customRoleId: custom?.id ?? null },
+      select: teamMemberSelect,
+    });
+    if (before.role !== choice.role || before.customRole?.id !== custom?.id) {
       await audit(tx, companyId, {
         action: "permissions",
         event: "roleChanged",
         item: { type: "user", id: userId, ref: before.fullName },
-        values: { from: before.role, role },
+        values: { from: roleWord(before.role, before.customRole), role: roleWord(choice.role, custom) },
       });
     }
     return user;
@@ -56,7 +65,7 @@ export async function removeUser(companyId: string, userId: string) {
       action: "permissions",
       event: "memberRemoved",
       item: { type: "user", ref: user.fullName },
-      values: { role: user.role },
+      values: { role: roleWord(user.role, user.customRole) },
     });
   });
 }

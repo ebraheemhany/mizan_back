@@ -16,7 +16,7 @@ export function createUsersRouter() {
   });
 
   router.patch("/:id", validateBody(changeRoleSchema), async (req, res) => {
-    const user = await users.changeRole(req.user!.companyId, parseId(req.params.id, "User"), req.body.role);
+    const user = await users.changeRole(req.user!.companyId, parseId(req.params.id, "User"), req.body);
     res.json({ user });
   });
 
