@@ -1,8 +1,6 @@
-// /api/assistant: the assistant (Claude) for every signed-in user. It acts as that
+// /api/assistant: the assistant (a free AI model) for every signed-in user. It acts as that
 // user: it can read and change only what they could in the app, and every change
 // waits for their confirmation. Answers stream as server-sent events.
-import Anthropic from "@anthropic-ai/sdk";
-import type { BetaMessageParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { Router, type Request, type RequestHandler, type Response } from "express";
 import { z } from "zod";
 import { AppError } from "../../lib/errors.js";
@@ -10,6 +8,7 @@ import { parseId } from "../../lib/params.js";
 import { authenticate } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate.js";
 import { assistantEnabled, closeDanglingCalls, runChanges, runTurn, type AssistantEvent } from "./assistant.agent.js";
+import { ModelUnavailableError, type ChatMessage } from "./assistant.llm.js";
 import { staticPrompt } from "./assistant.prompt.js";
 import {
   addTokens,
@@ -25,7 +24,7 @@ import {
   toDisplay,
   unlockConversation,
   usage,
-  userContent,
+  userMessage,
   type StoredConversation,
 } from "./assistant.service.js";
 
@@ -37,8 +36,8 @@ const messageSchema = z.object({
 
 const decisionSchema = z.object({ approve: z.boolean() });
 
-/** About 70K tokens of conversation (Claude's prompt stays well under its 100K price step). */
-export const MAX_CONVERSATION_CHARS = 250_000;
+/** About 25K tokens of conversation: free plans count every token of it on every request. */
+export const MAX_CONVERSATION_CHARS = 90_000;
 
 const requireEnabled: RequestHandler = (_req, _res, next) => {
   if (!assistantEnabled()) throw new AppError(503, "ASSISTANT_OFF", "The assistant isn't set up on this server");
@@ -73,12 +72,10 @@ function openStream(res: Response) {
 
 function errorEvent(err: unknown) {
   if (err instanceof AppError) return { type: "error", code: err.code, message: err.message };
-  // Mizan's own Anthropic account: the prepaid credit ran out, or the key is wrong or revoked.
   // Only the assistant stops; the rest of the app is unaffected.
-  if (err instanceof Anthropic.APIError && (err.status === 402 || err.status === 401 || err.status === 403)) {
-    return { type: "error", code: "ASSISTANT_SUSPENDED", message: "The assistant is paused for now" };
-  }
-  if (err instanceof Anthropic.RateLimitError || err instanceof Anthropic.InternalServerError || err instanceof Anthropic.APIConnectionError) {
+  if (err instanceof ModelUnavailableError) {
+    if (err.reason === "limit") return { type: "error", code: "ASSISTANT_QUOTA", message: "The free AI quota is used up for now, try again later" };
+    if (err.reason === "auth") return { type: "error", code: "ASSISTANT_SUSPENDED", message: "The assistant is paused for now" };
     return { type: "error", code: "ASSISTANT_UNAVAILABLE", message: "The assistant is busy right now, try again in a moment" };
   }
   return { type: "error", code: "ASSISTANT_FAILED", message: "The assistant couldn't finish this answer" };
@@ -92,7 +89,7 @@ async function streamTurn(
   req: Request,
   res: Response,
   conversation: StoredConversation,
-  start: (emit: (event: AssistantEvent) => void) => Promise<BetaMessageParam[]>,
+  start: (emit: (event: AssistantEvent) => void) => Promise<ChatMessage[]>,
 ) {
   const actor = req.user!;
   const stream = openStream(res);
@@ -121,7 +118,7 @@ async function streamTurn(
     req.log.error(
       { err },
       event.code === "ASSISTANT_SUSPENDED"
-        ? "assistant turn failed: Anthropic refused the account (top up the credit or check ANTHROPIC_API_KEY)"
+        ? "assistant turn failed: every model provider refused its key (check GROQ_API_KEY / LLM_API_KEY)"
         : "assistant turn failed",
     );
     stream.send(event);
@@ -170,7 +167,7 @@ export function createAssistantRouter() {
     await countMessage(req.user!.companyId);
     const conversation = await createConversation(req.user!, text);
     await lockConversation(conversation.id);
-    await streamTurn(req, res, conversation, async () => [{ role: "user", content: userContent(text, page) }]);
+    await streamTurn(req, res, conversation, async () => [userMessage(text, page)]);
   });
 
   /** The next message. If changes were waiting for confirmation, writing instead declines them. */
@@ -190,13 +187,9 @@ export function createAssistantRouter() {
       throw err;
     }
     await streamTurn(req, res, conversation, async () => {
-      const content = userContent(text, page);
-      if (conversation.pending) {
-        const next: BetaMessageParam = { role: "user", content: [...declinedResults(conversation.pending), ...content] };
-        return [...conversation.messages, next];
-      }
-      const next: BetaMessageParam = { role: "user", content };
-      return [...closeDanglingCalls(conversation.messages), next];
+      // The tool results first (all of the last turn's calls are answered), then what they wrote.
+      if (conversation.pending) return [...conversation.messages, ...declinedResults(conversation.pending), userMessage(text, page)];
+      return [...closeDanglingCalls(conversation.messages), userMessage(text, page)];
     });
   });
 
@@ -215,7 +208,7 @@ export function createAssistantRouter() {
     await streamTurn(req, res, conversation, async (emit) => {
       const caller = { token: req.headers.authorization!.slice("Bearer ".length).trim(), ip: req.ip ?? null };
       const results = await runChanges(pending, approve, { caller, emit });
-      const messages: BetaMessageParam[] = [...conversation.messages, { role: "user", content: results }];
+      const messages: ChatMessage[] = [...conversation.messages, ...results];
       // Saved at once: what was done is recorded even if the rest of the turn fails.
       await saveConversation(conversation.id, messages, null);
       return messages;

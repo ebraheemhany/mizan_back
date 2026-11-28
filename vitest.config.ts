@@ -41,8 +41,10 @@ export default defineConfig({
       PAYMOB_MOTO_INTEGRATION_ID: "",
       // Signs the Paymob callbacks the tests send.
       PAYMOB_HMAC_SECRET: "test-hmac-secret",
-      // Claude is scripted in the tests (setModelForTests); never the real API.
-      ANTHROPIC_API_KEY: "",
+      // The assistant's model is scripted or faked locally in the tests; never a real provider.
+      GROQ_API_KEY: "",
+      LLM_BASE_URL: "",
+      LLM_MODEL: "",
       DATABASE_URL: testDatabaseUrl,
     },
   },

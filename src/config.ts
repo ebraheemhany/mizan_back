@@ -48,12 +48,16 @@ const envSchema = z.object({
   // value as the frontend's NEXT_PUBLIC_GOOGLE_CLIENT_ID). Empty: the option is off.
   GOOGLE_CLIENT_ID: optionalText,
   MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
-  // The in-app assistant (Claude). Without a key the assistant is off (the app hides it).
-  ANTHROPIC_API_KEY: optionalText,
-  // Which Claude model answers, and how hard it thinks (low = cheaper and faster). Haiku is
-  // the low-cost one (prepaid credit, no subscription); high effort keeps it following the rules.
-  ASSISTANT_MODEL: z.string().trim().min(1).default("claude-haiku-5-5"),
-  ASSISTANT_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
+  // The in-app assistant: free models through any OpenAI-compatible API, tried in order
+  // (the next one when one is out of its free quota or down). With none set it is off.
+  // 1. Your own server or any provider: Ollama (http://host:11434/v1), OpenRouter
+  //    (https://openrouter.ai/api/v1)... LLM_MODEL is the model's name there.
+  LLM_BASE_URL: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.url().optional()),
+  LLM_API_KEY: optionalText,
+  LLM_MODEL: optionalText,
+  // 2. Groq's free plan (console.groq.com → API keys).
+  GROQ_API_KEY: optionalText,
+  GROQ_MODEL: z.string().trim().min(1).default("openai/gpt-oss-120b"),
   // Subscriptions through Paymob (Egypt). Without the keys, development uses a
   // local test checkout page instead; production refuses to take payments.
   PAYMOB_SECRET_KEY: z
@@ -106,6 +110,9 @@ const envSchema = z.object({
     for (const key of GMAIL_KEYS.filter((k) => env[k] === undefined)) {
       ctx.addIssue({ code: "custom", path: [key], message: "Set all four GMAIL_* values, or none" });
     }
+  }
+  if (env.LLM_BASE_URL && !env.LLM_MODEL) {
+    ctx.addIssue({ code: "custom", path: ["LLM_MODEL"], message: "Name the model to use at LLM_BASE_URL" });
   }
 });
 

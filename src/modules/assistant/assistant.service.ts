@@ -1,14 +1,13 @@
 // The assistant's conversations in the database, the plan's monthly limit, and what
 // the app shows of a conversation.
-import type { BetaMessageParam, BetaTextBlockParam, BetaToolResultBlockParam } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import type { Prisma } from "../../generated/prisma/client.js";
-import { config } from "../../config.js";
 import { businessToday } from "../../lib/dates.js";
 import { AppError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import type { Permission } from "../../lib/permissions.js";
 import { currentPlan } from "../billing/plans.js";
-import { readOutcome, type ChangeOutcome, type Pending, type PendingChange } from "./assistant.agent.js";
+import { inCallOrder, readOutcome, type ChangeOutcome, type Pending, type PendingChange } from "./assistant.agent.js";
+import type { ChatMessage } from "./assistant.llm.js";
 import { contextPrompt } from "./assistant.prompt.js";
 
 type Actor = { id: string; companyId: string; role: string; permissions: readonly Permission[] };
@@ -63,7 +62,7 @@ export async function addTokens(
 export type StoredConversation = {
   id: string;
   title: string;
-  messages: BetaMessageParam[];
+  messages: ChatMessage[];
   pending: Pending | null;
 };
 
@@ -79,7 +78,7 @@ export async function getConversation(actor: Actor, id: string): Promise<StoredC
   return {
     id: row.id,
     title: row.title,
-    messages: row.messages as unknown as BetaMessageParam[],
+    messages: row.messages as unknown as ChatMessage[],
     pending: (row.pending as unknown as Pending | null) ?? null,
   };
 }
@@ -90,7 +89,7 @@ export async function createConversation(actor: Actor, firstMessage: string) {
     data: { title, companyId: actor.companyId, userId: actor.id },
     select: { id: true, title: true },
   });
-  return { ...row, messages: [] as BetaMessageParam[], pending: null };
+  return { ...row, messages: [] as ChatMessage[], pending: null };
 }
 
 export async function listConversations(actor: Actor) {
@@ -107,7 +106,7 @@ export async function deleteConversation(actor: Actor, id: string) {
   if (count === 0) throw notFound();
 }
 
-export async function saveConversation(id: string, messages: BetaMessageParam[], pending: Pending | null) {
+export async function saveConversation(id: string, messages: ChatMessage[], pending: Pending | null) {
   await prisma.assistantConversation.update({
     where: { id },
     data: { messages: json(messages), pending: pending ? json(pending) : json(null) },
@@ -163,8 +162,13 @@ export async function promptContext(actor: Actor) {
 
 const PAGE_PREFIX = "[The user is on this page of the app: ";
 
-export function userContent(text: string, page?: string): BetaTextBlockParam[] {
-  return page ? [{ type: "text", text: `${PAGE_PREFIX}${page}]` }, { type: "text", text }] : [{ type: "text", text }];
+export function userMessage(text: string, page?: string): ChatMessage {
+  return { role: "user", content: page ? `${PAGE_PREFIX}${page}]\n${text}` : text };
+}
+
+/** What the user wrote, without the page note. */
+function userText(content: string) {
+  return content.startsWith(PAGE_PREFIX) ? content.slice(content.indexOf("\n") + 1) : content;
 }
 
 // ---------------------------------------------------------------------------
@@ -185,50 +189,52 @@ export type DisplayItem =
       message?: string;
     };
 
-type Block = { type: string; text?: string; id?: string; name?: string; input?: unknown; tool_use_id?: string; content?: unknown };
-
-const blocks = (content: BetaMessageParam["content"] | undefined) =>
-  (typeof content === "string" ? [{ type: "text", text: content }] : (content ?? [])) as Block[];
-
 function failedMessage(outcome: Extract<ChangeOutcome, { status: "failed" }>) {
   const error = (outcome.error as { error?: { message?: unknown } } | null)?.error;
   return typeof error?.message === "string" ? error.message : `HTTP ${outcome.httpStatus}`;
 }
 
-/** The conversation as chat bubbles and action cards (tool calls for reading are left out). */
-export function toDisplay(messages: BetaMessageParam[], pending: Pending | null): DisplayItem[] {
+function parseInput(text: string): Partial<PendingChange> {
+  try {
+    return (JSON.parse(text) ?? {}) as Partial<PendingChange>;
+  } catch {
+    return {};
+  }
+}
+
+/** The conversation as chat bubbles and action cards (reads and docs are left out). */
+export function toDisplay(messages: ChatMessage[], pending: Pending | null): DisplayItem[] {
   const outcomes = new Map<string, ChangeOutcome>();
   for (const message of messages) {
-    if (message.role !== "user") continue;
-    for (const block of blocks(message.content)) {
-      if (block.type !== "tool_result" || !block.tool_use_id) continue;
-      const outcome = readOutcome(block.content);
-      if (outcome) outcomes.set(block.tool_use_id, outcome);
-    }
+    if (message.role !== "tool") continue;
+    const outcome = readOutcome(message.content);
+    if (outcome) outcomes.set(message.tool_call_id, outcome);
   }
   const waiting = new Set(pending?.changes.map((change) => change.id) ?? []);
 
   const items: DisplayItem[] = [];
   for (const message of messages) {
-    if (message.role === "system") continue;
-    for (const block of blocks(message.content)) {
-      if (block.type === "text" && block.text) {
-        if (message.role === "user" && block.text.startsWith(PAGE_PREFIX)) continue;
+    if (message.role === "user") {
+      items.push({ kind: "user", text: userText(message.content) });
+    } else if (message.role === "assistant") {
+      if (message.content) {
         const last = items.at(-1);
         // One bubble for the assistant's text between two things the user sees.
-        if (message.role === "assistant" && last?.kind === "assistant") last.text += `\n\n${block.text}`;
-        else items.push({ kind: message.role, text: block.text });
-      } else if (block.type === "tool_use" && block.name === "mizan_change" && block.id) {
-        const input = (block.input ?? {}) as Partial<PendingChange>;
-        const outcome = outcomes.get(block.id);
+        if (last?.kind === "assistant") last.text += `\n\n${message.content}`;
+        else items.push({ kind: "assistant", text: message.content });
+      }
+      for (const call of message.tool_calls ?? []) {
+        if (call.function.name !== "mizan_change") continue;
+        const input = parseInput(call.function.arguments);
+        const outcome = outcomes.get(call.id);
         items.push({
           kind: "action",
-          id: block.id,
+          id: call.id,
           title: String(input.title ?? ""),
           details: Array.isArray(input.details) ? input.details.map(String) : [],
           method: String(input.method ?? ""),
           path: String(input.path ?? ""),
-          status: outcome?.status ?? (waiting.has(block.id) ? "pending" : "failed"),
+          status: outcome?.status ?? (waiting.has(call.id) ? "pending" : "failed"),
           ...(outcome?.status === "failed" ? { message: failedMessage(outcome) } : {}),
         });
       }
@@ -237,18 +243,12 @@ export function toDisplay(messages: BetaMessageParam[], pending: Pending | null)
   return items;
 }
 
-/** The tool results for a pending turn the user moved on from (wrote something else instead). */
-export function declinedResults(pending: Pending): BetaToolResultBlockParam[] {
-  return [
-    ...pending.results,
-    ...pending.changes.map(
-      (change): BetaToolResultBlockParam => ({
-        type: "tool_result",
-        tool_use_id: change.id,
-        content: JSON.stringify({ status: "declined", note: "The user wrote a new message instead of confirming." }),
-      }),
-    ),
-  ];
+/** The results for a pending turn the user moved on from (wrote something else instead). */
+export function declinedResults(pending: Pending): ChatMessage[] {
+  const declined = pending.changes.map((change) => ({
+    role: "tool" as const,
+    tool_call_id: change.id,
+    content: JSON.stringify({ status: "declined", note: "The user wrote a new message instead of confirming." }),
+  }));
+  return inCallOrder([...pending.results, ...declined], pending.order ?? []);
 }
-
-export const assistantModel = () => config.ASSISTANT_MODEL;

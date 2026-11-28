@@ -70,10 +70,11 @@ export type Endpoint = {
   body?: z.ZodType;
 };
 
-type Section = { title: string; note: string; endpoints: Endpoint[] };
+type Section = { id: string; title: string; note: string; endpoints: Endpoint[] };
 
 const SECTIONS: Section[] = [
   {
+    id: "overview",
     title: "Overview",
     note: "Every role.",
     endpoints: [
@@ -83,6 +84,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "customers",
     title: "Customers",
     note: "Every role reads; writing needs editCustomers; deleting needs deleteData.",
     endpoints: [
@@ -96,6 +98,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "products",
     title: "Products and services (the catalog used on invoice lines)",
     note: "Every role reads; writing needs editProducts; deleting needs deleteData.",
     endpoints: [
@@ -108,6 +111,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "invoices",
     title: "Invoices",
     note:
       ":ref is the invoice number (1044) or its id. Every role reads; writing needs issueInvoices; payments and credit notes need recordPayments. " +
@@ -133,6 +137,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "payments",
     title: "Payments received",
     note: "Every role reads; writing needs recordPayments.",
     endpoints: [
@@ -151,6 +156,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "quotes",
     title: "Quotes",
     note: ":ref is the quote number or id. Every role reads; writing needs quotes. To turn an accepted quote into an invoice, POST /api/invoices with fromQuote.",
     endpoints: [
@@ -168,6 +174,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "recurring",
     title: "Recurring invoices (paid plans)",
     note: "Every role reads; writing needs issueInvoices.",
     endpoints: [
@@ -181,6 +188,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "expenses",
     title: "Expenses and suppliers",
     note: "Needs the expenses permission; deleting a supplier needs deleteData. Expense amounts include VAT; vat is the VAT inside them.",
     endpoints: [
@@ -198,6 +206,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "reports",
     title: "Reports",
     note: "Needs reports. period: a month 'YYYY-MM' (not in the future), 'thisQuarter' or 'thisYear'; left out = this month.",
     endpoints: [
@@ -210,6 +219,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "tasks",
     title: "Tasks",
     note: "Every role reads; writing needs tasks.",
     endpoints: [
@@ -220,6 +230,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "deals",
     title: "Deals (the sales pipeline)",
     note: "Every role reads; writing needs deals. A deal is won by moving it to stage won.",
     endpoints: [
@@ -235,6 +246,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "payroll",
     title: "Employees and payroll (paid plans)",
     note: "Needs payroll. :month is YYYY-MM.",
     endpoints: [
@@ -266,6 +278,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "books",
     title: "The books (chart of accounts, journal, closing months)",
     note: "Needs ledger; reopening a closed month needs reopenPeriods. Invoices, payments, expenses and payroll make their entries automatically.",
     endpoints: [
@@ -287,6 +300,7 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    id: "settings",
     title: "Settings and team",
     note:
       "Reading settings: every role. Changing them, the team, roles and invitations: the owner. " +
@@ -426,6 +440,31 @@ function renderEndpoint(endpoint: Endpoint) {
   if (endpoint.query) lines.push(`  query ${describe(endpoint.query)}`);
   if (endpoint.body) lines.push(`  body ${describe(endpoint.body)}`);
   return lines.join("\n");
+}
+
+/** The sections' ids, for the docs tool. */
+export const SECTION_IDS = SECTIONS.map((section) => section.id);
+
+const endpointLine = (e: Endpoint) => `${e.method} ${e.path} — ${e.does}`;
+
+let index: string | undefined;
+
+/**
+ * What the model always sees (in the system prompt): every endpoint in one line, without
+ * the bodies, so the prompt stays small enough for free plans' per-minute token limits.
+ */
+export function apiIndex() {
+  index ??= SECTIONS.map(
+    (section) => `### ${section.id}: ${section.title}\n(${section.note})\n${section.endpoints.map(endpointLine).join("\n")}`,
+  ).join("\n\n");
+  return index;
+}
+
+/** The query strings and bodies of some sections, read with the docs tool before using them. */
+export function apiDocs(ids: readonly string[]) {
+  const wanted = SECTIONS.filter((section) => ids.includes(section.id));
+  if (wanted.length === 0) return `No such section. The sections are: ${SECTION_IDS.join(", ")}.`;
+  return wanted.map((section) => `### ${section.id}\n${section.endpoints.map(renderEndpoint).join("\n")}`).join("\n\n");
 }
 
 let reference: string | undefined;
