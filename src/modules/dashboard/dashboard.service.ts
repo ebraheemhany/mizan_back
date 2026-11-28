@@ -23,7 +23,7 @@ export async function dashboard(companyId: string, role: Role) {
     invoiceStats(companyId),
     prisma.invoice.findMany({
       where: { companyId, ...overdueWhere(today) },
-      select: { id: true, number: true, numberPrefix: true, customerName: true, total: true, amountPaid: true, dueDate: true },
+      select: { id: true, number: true, numberPrefix: true, customerName: true, total: true, amountPaid: true, credited: true, dueDate: true },
       orderBy: [{ dueDate: "asc" }, { number: "asc" }],
       take: ATTENTION_LIMIT,
     }),
@@ -58,7 +58,7 @@ export async function dashboard(companyId: string, role: Role) {
     number: i.number,
     displayNumber: `${i.numberPrefix}${i.number}`,
     customer: i.customerName,
-    amount: moneyString(i.total.minus(i.amountPaid)),
+    amount: moneyString(i.total.minus(i.amountPaid).minus(i.credited)),
     days: daysBetween(toIso(i.dueDate), today),
   }));
   for (const deal of quietDeals) {

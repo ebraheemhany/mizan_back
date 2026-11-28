@@ -170,11 +170,11 @@ async function overdueAlerts(company: CompanyRow, today: string) {
   if (waiting.length === 0) return 0;
   const overdue = await prisma.invoice.findMany({
     where: { companyId: company.id, status: { in: OPEN }, dueDate: { lt: toDate(today) } },
-    select: { number: true, numberPrefix: true, customerName: true, total: true, amountPaid: true, dueDate: true },
+    select: { number: true, numberPrefix: true, customerName: true, total: true, amountPaid: true, credited: true, dueDate: true },
     orderBy: { dueDate: "asc" },
   });
   if (overdue.length === 0) return 0;
-  const total = overdue.reduce((sum, i) => sum.plus(i.total.minus(i.amountPaid)), ZERO);
+  const total = overdue.reduce((sum, i) => sum.plus(i.total.minus(i.amountPaid).minus(i.credited)), ZERO);
   const facts = {
     count: overdue.length,
     total: moneyString(total),
@@ -182,7 +182,7 @@ async function overdueAlerts(company: CompanyRow, today: string) {
     items: overdue.slice(0, OVERDUE_LISTED).map((i) => ({
       number: `${i.numberPrefix}${i.number}`,
       customer: i.customerName,
-      remaining: moneyString(i.total.minus(i.amountPaid)),
+      remaining: moneyString(i.total.minus(i.amountPaid).minus(i.credited)),
       daysLate: daysBetween(toIso(i.dueDate), today),
     })),
     url: appUrl("invoices"),
@@ -262,7 +262,7 @@ async function weeklyDigests(company: CompanyRow, today: string) {
     prisma.expense.aggregate({ where: { companyId: company.id, date: week }, _sum: { amount: true } }),
     prisma.invoice.findMany({
       where: { companyId: company.id, status: { in: OPEN } },
-      select: { total: true, amountPaid: true, dueDate: true },
+      select: { total: true, amountPaid: true, credited: true, dueDate: true },
     }),
   ]);
   const soonEnd = addDays(today, 6);
@@ -271,7 +271,7 @@ async function weeklyDigests(company: CompanyRow, today: string) {
   let overdueCount = 0;
   let dueSoon = ZERO;
   for (const i of open) {
-    const left = i.total.minus(i.amountPaid);
+    const left = i.total.minus(i.amountPaid).minus(i.credited);
     const due = toIso(i.dueDate);
     outstanding = outstanding.plus(left);
     if (due < today) {

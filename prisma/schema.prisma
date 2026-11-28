@@ -39,6 +39,8 @@ model Company {
   // Numbering: the next invoice is invoicePrefix + invoiceNextNumber (INV-1044).
   invoicePrefix      String @default("INV-")
   invoiceNextNumber  Int    @default(1)
+  // Credit notes are numbered CN-0001, CN-0002... per company.
+  creditNoteNextNumber Int  @default(1)
   quotePrefix        String @default("Q-")
   quoteNextNumber    Int    @default(1)
   // Receipts: PAY-0001, PAY-0002...
@@ -98,6 +100,7 @@ model Company {
   payrollItems      PayrollItem[]
   sentNotices       SentNotice[]
   suppliers         Supplier[]
+  creditNotes       CreditNote[]
 
   @@map("companies")
 }
@@ -199,6 +202,7 @@ model Customer {
   assignedTo   User?   @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
 
   invoices  Invoice[]
+  creditNotes CreditNote[]
   tasks     Task[]
   quotes    Quote[]
   recurring RecurringInvoice[]
@@ -362,6 +366,9 @@ enum InvoiceEventType {
   // The customer sent a receipt on the invoice link (waits for review).
   paymentClaimed
   paymentClaimRejected
+  // A credit note was issued on the invoice, or taken back.
+  creditNote
+  creditNoteDeleted
 }
 
 // "overdue" is not a stored status: a sent/partial invoice whose due date has
@@ -392,6 +399,9 @@ model Invoice {
   vat        Decimal @db.Decimal(14, 2)
   total      Decimal @db.Decimal(14, 2)
   amountPaid Decimal @default(0) @db.Decimal(14, 2)
+  // Taken off by credit notes (returns, a discount after the fact). What is still owed:
+  // total - amountPaid - credited.
+  credited   Decimal @default(0) @db.Decimal(14, 2)
 
   notes       String?
   // Random token for the public link (/i/<token>). Set when the invoice is sent.
@@ -415,6 +425,7 @@ model Invoice {
   events         InvoiceEvent[]
   paymentClaims  PaymentClaim[]
   onlinePayments OnlinePayment[]
+  creditNotes    CreditNote[]
   // The accepted quote this invoice was made from, if any.
   quote          Quote?
 
@@ -1514,4 +1525,66 @@ model Supplier {
 
   @@index([companyId, name])
   @@map("suppliers")
+}
+
+// ---------------------------------------------------------------------------
+// Credit notes: part (or all) of an issued invoice taken back (goods returned, a discount
+// after the fact, a correction). It lowers what the customer owes; whatever they had
+// already paid beyond what's now owed is refunded, from the account named.
+// ---------------------------------------------------------------------------
+
+enum CreditNoteReason {
+  return
+  discount
+  correction
+  other
+}
+
+model CreditNote {
+  id     String           @id @default(uuid())
+  // Shown as CN-0001.
+  number Int
+  date   DateTime         @db.Date
+  reason CreditNoteReason
+  note   String?
+
+  subtotal Decimal @db.Decimal(14, 2)
+  // The invoice's rate.
+  vatRate  Decimal @db.Decimal(5, 2)
+  vat      Decimal @db.Decimal(14, 2)
+  total    Decimal @db.Decimal(14, 2)
+  // Paid back to the customer (they had paid more than is now owed), and from where.
+  refund        Decimal           @default(0) @db.Decimal(14, 2)
+  refundAccount ReceivingAccount?
+
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdById String?
+
+  companyId  String
+  company    Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoiceId  String
+  invoice    Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer         @relation(fields: [customerId], references: [id], onDelete: NoAction)
+  lines      CreditNoteLine[]
+
+  @@unique([companyId, number])
+  @@index([invoiceId])
+  @@index([companyId, date])
+  @@map("credit_notes")
+}
+
+model CreditNoteLine {
+  id          String  @id @default(uuid())
+  position    Int
+  description String
+  quantity    Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  amount      Decimal @db.Decimal(14, 2)
+
+  creditNoteId String
+  creditNote   CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+
+  @@index([creditNoteId])
+  @@map("credit_note_lines")
 }

@@ -7,6 +7,10 @@ import { Prisma } from "../../generated/prisma/client.js";
  *
  *   invoice         issued (sent, partly paid or paid), on its issue date:
  *                   Dr customers (total) / Cr sales (before VAT), Cr VAT
+ *   creditNote      on its date: Dr sales (before VAT), Dr VAT / Cr customers (part of an
+ *                   invoice taken back: a return, a discount after the fact)
+ *   creditNoteRefund the same day, when the customer had paid more than is now owed:
+ *                   Dr customers / Cr the account the refund came from
  *   payment         on its date: Dr where it went in / Cr customers.
  *                   A cheque goes into "cheques" until it clears.
  *   chequeCleared   the day a cheque cleared: Dr where it went in / Cr cheques
@@ -27,6 +31,8 @@ import { Prisma } from "../../generated/prisma/client.js";
  */
 export type AutoSource =
   | "invoice"
+  | "creditNote"
+  | "creditNoteRefund"
   | "payment"
   | "chequeCleared"
   | "chequeBounced"
@@ -72,6 +78,25 @@ export function autoLines(companyId: string) {
       ('vat', 0::numeric, i."vat", 2)
     ) ${LINE}
     WHERE i."companyId" = ${companyId} AND i."status" IN ${ISSUED} AND (l."debit" > 0 OR l."credit" > 0)
+
+    UNION ALL
+    SELECT 'creditNote', c."id", c."date", l."key", l."debit", l."credit", l."position"
+    FROM "credit_notes" c
+    CROSS JOIN LATERAL (VALUES
+      ('sales'::text, c."subtotal", 0::numeric, 0),
+      ('vat', c."vat", 0::numeric, 1),
+      ('customers', 0::numeric, c."total", 2)
+    ) ${LINE}
+    WHERE c."companyId" = ${companyId} AND (l."debit" > 0 OR l."credit" > 0)
+
+    UNION ALL
+    SELECT 'creditNoteRefund', c."id", c."date", l."key", l."debit", l."credit", l."position"
+    FROM "credit_notes" c
+    CROSS JOIN LATERAL (VALUES
+      ('customers'::text, c."refund", 0::numeric, 0),
+      (COALESCE(c."refundAccount"::text, 'cashbox'), 0::numeric, c."refund", 1)
+    ) ${LINE}
+    WHERE c."companyId" = ${companyId} AND c."refund" > 0
 
     UNION ALL
     SELECT 'payment', p."id", p."date", l."key", l."debit", l."credit", l."position"
@@ -176,11 +201,24 @@ export function entryHeaders(companyId: string) {
     `'PAY-' || lpad(p."number"::text, GREATEST(4, length(p."number"::text)), '0') || ' ' || i."numberPrefix" || i."number" || ' ' || i."customerName"`,
   );
   const expenseText = Prisma.raw(`e."title" || ' ' || COALESCE(e."vendor", '')`);
+  const creditText = Prisma.raw(
+    `'CN-' || lpad(c."number"::text, GREATEST(4, length(c."number"::text)), '0') || ' ' || i."numberPrefix" || i."number" || ' ' || i."customerName"`,
+  );
   return Prisma.sql`
     SELECT 'invoice'::text AS "source", i."id" AS "entryId", i."issueDate" AS "date", i."createdAt" AS "at",
            'posted'::text AS "status", i."total" AS "amount", i."numberPrefix" || i."number" || ' ' || i."customerName" AS "text"
     FROM "invoices" i
     WHERE i."companyId" = ${companyId} AND i."status" IN ${ISSUED} AND i."total" > 0
+
+    UNION ALL
+    SELECT 'creditNote', c."id", c."date", c."createdAt", 'posted', c."total", ${creditText}
+    FROM "credit_notes" c JOIN "invoices" i ON i."id" = c."invoiceId"
+    WHERE c."companyId" = ${companyId}
+
+    UNION ALL
+    SELECT 'creditNoteRefund', c."id", c."date", c."createdAt", 'posted', c."refund", ${creditText}
+    FROM "credit_notes" c JOIN "invoices" i ON i."id" = c."invoiceId"
+    WHERE c."companyId" = ${companyId} AND c."refund" > 0
 
     UNION ALL
     SELECT 'payment', p."id", p."date", p."createdAt", 'posted', p."amount", ${paymentText}

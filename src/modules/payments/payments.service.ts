@@ -155,7 +155,7 @@ export async function paymentStats(companyId: string) {
     collected(lastMonth),
     prisma.invoice.aggregate({
       where: { companyId, status: { in: ["sent", "partial"] } },
-      _sum: { total: true, amountPaid: true },
+      _sum: { total: true, amountPaid: true, credited: true },
       _count: true,
     }),
     prisma.invoicePayment.aggregate({
@@ -174,7 +174,7 @@ export async function paymentStats(companyId: string) {
     collectedThisMonth: moneyString(nowSum),
     // null when there was nothing to compare with last month.
     collectedChangePct: beforeSum.isZero() ? null : nowSum.minus(beforeSum).dividedBy(beforeSum).times(100).round().toNumber(),
-    awaiting: moneyString((open._sum.total ?? ZERO).minus(open._sum.amountPaid ?? ZERO)),
+    awaiting: moneyString((open._sum.total ?? ZERO).minus(open._sum.amountPaid ?? ZERO).minus(open._sum.credited ?? ZERO)),
     awaitingCount: open._count,
     pendingCheques: moneyString(cheques._sum.amount ?? ZERO),
     pendingChequesCount: cheques._count,
@@ -204,6 +204,7 @@ export async function openInvoices(companyId: string) {
       dueDate: true,
       total: true,
       amountPaid: true,
+      credited: true,
     },
     orderBy: [{ dueDate: "asc" }, { number: "asc" }],
     take: 300,
@@ -226,7 +227,7 @@ export async function openInvoices(companyId: string) {
       customerId: r.customerId,
       customer: r.customer.name,
       customerPhone: r.customer.phone ?? r.customerPhone,
-      balance: moneyString(r.total.minus(r.amountPaid)),
+      balance: moneyString(r.total.minus(r.amountPaid).minus(r.credited)),
       issueDate: toIso(r.issueDate),
       dueDate: due,
       daysOverdue: overdueIds.has(r.id) ? daysBetween(due, today) : null,
@@ -314,7 +315,7 @@ export async function removePayment(actor: Actor, id: string) {
     const updated = await tx.$executeRaw`
       UPDATE "invoices"
       SET "amountPaid" = "amountPaid" - ${payment.amount}::numeric,
-          "status" = (CASE WHEN "amountPaid" - ${payment.amount}::numeric = 0 THEN 'sent' ELSE 'partial' END)::"InvoiceStatus",
+          "status" = (CASE WHEN "amountPaid" - ${payment.amount}::numeric + "credited" = 0 THEN 'sent' ELSE 'partial' END)::"InvoiceStatus",
           "updatedAt" = now()
       WHERE "id" = ${payment.invoiceId}
         AND "status" IN ('partial', 'paid')
@@ -397,7 +398,7 @@ export async function bouncePayment(actor: Actor, id: string) {
     const updated = await tx.$executeRaw`
       UPDATE "invoices"
       SET "amountPaid" = "amountPaid" - ${payment.amount}::numeric,
-          "status" = (CASE WHEN "amountPaid" - ${payment.amount}::numeric = 0 THEN 'sent' ELSE 'partial' END)::"InvoiceStatus",
+          "status" = (CASE WHEN "amountPaid" - ${payment.amount}::numeric + "credited" = 0 THEN 'sent' ELSE 'partial' END)::"InvoiceStatus",
           "updatedAt" = now()
       WHERE "id" = ${payment.invoiceId}
         AND "status" IN ('partial', 'paid')

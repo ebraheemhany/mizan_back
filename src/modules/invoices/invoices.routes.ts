@@ -11,6 +11,8 @@ import {
   reminderSchema,
 } from "./invoices.schemas.js";
 import * as invoices from "./invoices.service.js";
+import { createCreditNote, creditNoteSchema, deleteCreditNote } from "./credit-notes.js";
+import { parseId } from "../../lib/params.js";
 import { publicPaymentOptions } from "../collections/collections.service.js";
 import { notifyPayment } from "../notifications/notices.service.js";
 
@@ -56,6 +58,17 @@ export function createInvoicesRouter(limit: AuthRateLimiters) {
 
   router.post("/:ref/cancel", issue, async (req, res) => {
     res.json({ invoice: await invoices.cancelInvoice(req.user!, invoices.parseInvoiceRef(req.params.ref)) });
+  });
+
+  // Credit notes: by whoever records payments; taken back by the owner.
+  router.post("/:ref/credit-notes", pay, validateBody(creditNoteSchema), async (req, res) => {
+    const ref = invoices.parseInvoiceRef(req.params.ref);
+    res.status(201).json({ invoice: await createCreditNote(req.user!, ref, req.body) });
+  });
+
+  router.delete("/:ref/credit-notes/:id", requirePermission("deleteData"), async (req, res) => {
+    const ref = invoices.parseInvoiceRef(req.params.ref);
+    res.json({ invoice: await deleteCreditNote(req.user!, ref, parseId(req.params.id, "Credit note")) });
   });
 
   router.post("/:ref/payments", pay, validateBody(recordPaymentSchema), async (req, res) => {

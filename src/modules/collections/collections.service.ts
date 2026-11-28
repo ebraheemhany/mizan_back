@@ -146,6 +146,7 @@ const publicInvoiceSelect = {
   issueDate: true,
   total: true,
   amountPaid: true,
+  credited: true,
   customerName: true,
   customerEmail: true,
   customerPhone: true,
@@ -164,7 +165,7 @@ async function findByToken(db: Tx | typeof prisma, token: string) {
 
 type PublicInvoice = Awaited<ReturnType<typeof findByToken>>;
 
-const remainingOf = (invoice: PublicInvoice) => invoice.total.minus(invoice.amountPaid);
+const remainingOf = (invoice: PublicInvoice) => invoice.total.minus(invoice.amountPaid).minus(invoice.credited);
 const isPayable = (invoice: PublicInvoice) =>
   (PAYABLE as readonly string[]).includes(invoice.status) && remainingOf(invoice).greaterThan(0);
 

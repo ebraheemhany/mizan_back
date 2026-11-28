@@ -4,7 +4,7 @@ import { AppError } from "../../lib/errors.js";
 import { Decimal, money, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
-import { paymentNumber } from "../invoices/invoices.service.js";
+import { creditNoteNumber, paymentNumber } from "../invoices/invoices.service.js";
 import { debitNormal, getChart, idsByKey, type ChartAccount } from "./ledger.chart.js";
 import { checkBooksOpen, lockBooks } from "./ledger.periods.js";
 import type { AccountInput, EntryInput, ListEntriesQuery, UpdateAccountInput } from "./ledger.schemas.js";
@@ -197,7 +197,7 @@ type HeaderRow = { source: EntrySource; entryId: string; date: Date; status: Jou
 type LineDto = ReturnType<typeof accountRef> & { debit: string; credit: string };
 
 const SOURCES: Record<Exclude<ListEntriesQuery["source"], "all">, EntrySource[]> = {
-  invoice: ["invoice"],
+  invoice: ["invoice", "creditNote", "creditNoteRefund"],
   payment: ["payment", "chequeCleared", "chequeBounced"],
   expense: ["expense", "expensePayment"],
   payroll: ["payroll", "payrollPayment", "advance"],
@@ -243,7 +243,7 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
   const idsOf = (...sources: EntrySource[]) => rows.filter((r) => sources.includes(r.source)).map((r) => r.entryId);
   const autoIds = [...new Set(rows.filter((r) => r.source !== "manual").map((r) => r.entryId))];
 
-  const [lines, invoices, payments, expenses, manual, runs, advances] = await Promise.all([
+  const [lines, invoices, payments, expenses, manual, runs, advances, creditNotes] = await Promise.all([
     autoIds.length
       ? prisma.$queryRaw<{ source: EntrySource; entryId: string; key: string; debit: Decimal; credit: Decimal }[]>`
           SELECT x."source", x."entryId", x."key", x."debit", x."credit"
@@ -285,7 +285,12 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
       where: { companyId, id: { in: idsOf("advance") } },
       select: { id: true, note: true, employee: { select: { id: true, name: true } } },
     }),
+    prisma.creditNote.findMany({
+      where: { companyId, id: { in: idsOf("creditNote", "creditNoteRefund") } },
+      select: { id: true, number: true, invoice: { select: { number: true, numberPrefix: true, customerName: true } } },
+    }),
   ]);
+  const creditNoteById = new Map(creditNotes.map((c) => [c.id, c]));
 
   const accounts = new Map(chart.map((a) => [a.id, a]));
   const byKey = idsByKey(chart);
@@ -334,6 +339,16 @@ async function describeEntries(companyId: string, chart: ChartAccount[], rows: H
     const own = lines
       .filter((l) => l.entryId === r.entryId && l.source === r.source)
       .map((l) => line(byKey.get(l.key)!, l.debit, l.credit));
+    if (r.source === "creditNote" || r.source === "creditNoteRefund") {
+      const c = creditNoteById.get(r.entryId);
+      return {
+        ...base,
+        ref: c ? creditNoteNumber(c.number) : null,
+        party: c?.invoice.customerName ?? null,
+        invoice: c ? invoiceRef(c.invoice) : null,
+        lines: own,
+      };
+    }
     if (r.source === "invoice") {
       const i = invoiceById.get(r.entryId);
       return { ...base, ref: i ? invoiceRef(i).displayNumber : null, party: i?.customerName ?? null, invoice: i ? invoiceRef(i) : null, lines: own };

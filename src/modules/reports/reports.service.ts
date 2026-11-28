@@ -4,7 +4,7 @@ import { Decimal, moneyString, ZERO } from "../../lib/money.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { changePct, expensesByMonth } from "../expenses/expenses.service.js";
-import { paymentNumber } from "../invoices/invoices.service.js";
+import { creditNoteNumber, paymentNumber } from "../invoices/invoices.service.js";
 import { payrollCostByMonth, withPayroll } from "../payroll/payroll.service.js";
 import { ISSUED_SQL, ISSUED_STATUSES, revenueByMonth } from "./revenue.js";
 
@@ -194,11 +194,11 @@ export async function aging(companyId: string) {
   const asOf = businessToday();
   const raw = await prisma.$queryRaw<AgingRow[]>`
     WITH owed AS (
-      SELECT i."customerId", i."total" - i."amountPaid" AS amount, ${toDate(asOf)}::date - i."dueDate" AS days
+      SELECT i."customerId", i."total" - i."amountPaid" - i."credited" AS amount, ${toDate(asOf)}::date - i."dueDate" AS days
       FROM "invoices" i
       WHERE i."companyId" = ${companyId}
         AND i."status" IN ('sent', 'partial')
-        AND i."total" > i."amountPaid"
+        AND i."total" > i."amountPaid" + i."credited"
     )
     SELECT c."id", c."name",
       COALESCE(SUM(o.amount) FILTER (WHERE o.days <= 0), 0) AS "notDue",
@@ -258,7 +258,9 @@ export async function vatReport(companyId: string, periodKey: string | undefined
     issueDate: within(counted(period)),
   } satisfies Prisma.InvoiceWhereInput;
 
-  const [taxable, exempt, used, company, purchases] = await prisma.$transaction([
+  const credits = (vatRate: Prisma.DecimalFilter | number) =>
+    prisma.creditNote.aggregate({ where: { companyId, date: within(counted(period)), vatRate }, _sum: { subtotal: true, vat: true }, _count: true });
+  const [taxable, exempt, used, company, purchases, taxableCredits, exemptCredits] = await prisma.$transaction([
     prisma.invoice.aggregate({ where: { ...issued, vatRate: { gt: 0 } }, _sum: { subtotal: true, vat: true }, _count: true }),
     // VAT off in the settings when the invoice was written (vatRate 0).
     prisma.invoice.aggregate({ where: { ...issued, vatRate: 0 }, _sum: { subtotal: true, vat: true }, _count: true }),
@@ -271,10 +273,13 @@ export async function vatReport(companyId: string, periodKey: string | undefined
       _sum: { amount: true, vat: true },
       _count: true,
     }),
+    credits({ gt: 0 }),
+    credits(0),
   ]);
   const rates = used.map((r) => Number(r.vatRate));
 
-  const output = (taxable._sum.vat ?? ZERO).plus(exempt._sum.vat ?? ZERO);
+  // Output VAT: on the period's invoices, less the VAT of its credit notes.
+  const output = (taxable._sum.vat ?? ZERO).plus(exempt._sum.vat ?? ZERO).minus(taxableCredits._sum.vat ?? ZERO);
   const input = purchases._sum.vat ?? ZERO;
 
   return {
@@ -286,8 +291,11 @@ export async function vatReport(companyId: string, periodKey: string | undefined
     output: moneyString(output),
     input: moneyString(input),
     due: moneyString(output.minus(input)),
-    taxableSales: moneyString(taxable._sum.subtotal ?? ZERO),
-    exemptSales: moneyString(exempt._sum.subtotal ?? ZERO),
+    taxableSales: moneyString((taxable._sum.subtotal ?? ZERO).minus(taxableCredits._sum.subtotal ?? ZERO)),
+    exemptSales: moneyString((exempt._sum.subtotal ?? ZERO).minus(exemptCredits._sum.subtotal ?? ZERO)),
+    // Credit notes in the period (returns, discounts): already taken off the sales and VAT above.
+    creditNotesCount: taxableCredits._count + exemptCredits._count,
+    creditedVat: moneyString(taxableCredits._sum.vat ?? ZERO),
     // Purchases with VAT on them (the cost, VAT excluded), and how many.
     taxablePurchases: moneyString((purchases._sum.amount ?? ZERO).minus(input)),
     purchasesCount: purchases._count,
@@ -306,6 +314,8 @@ export async function vatReport(companyId: string, periodKey: string | undefined
  * (debit) and payment (credit) in the period with a running balance, and the
  * closing balance. A pending cheque already lowers what is owed.
  */
+const ORDER = { invoice: 0, creditNote: 1, refund: 2, payment: 3 } as const;
+
 export async function statement(companyId: string, customerId: string, periodKey: string | undefined) {
   const today = businessToday();
   const period = resolvePeriod(periodKey, today);
@@ -313,7 +323,7 @@ export async function statement(companyId: string, customerId: string, periodKey
   const before = { lt: toDate(period.start) };
 
   // One snapshot, so the opening balance and the rows can't disagree with each other.
-  const [customer, openingInvoiced, openingPaid, invoices, payments] = await prisma.$transaction(
+  const [customer, openingInvoiced, openingPaid, invoices, payments, openingCredited, creditNotes] = await prisma.$transaction(
     [
       prisma.customer.findFirst({ where: { id: customerId, companyId }, select: { id: true, name: true } }),
       prisma.invoice.aggregate({ where: { ...issued, issueDate: before }, _sum: { total: true } }),
@@ -338,12 +348,20 @@ export async function statement(companyId: string, customerId: string, periodKey
           invoice: { select: { number: true, numberPrefix: true } },
         },
       }),
+      prisma.creditNote.aggregate({ where: { companyId, customerId, date: before }, _sum: { total: true, refund: true } }),
+      prisma.creditNote.findMany({
+        where: { companyId, customerId, date: within(counted(period)) },
+        select: { id: true, number: true, date: true, total: true, refund: true, invoice: { select: { number: true, numberPrefix: true } } },
+      }),
     ],
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
   );
   if (!customer) throw notFound("Customer");
 
-  const opening = (openingInvoiced._sum.total ?? ZERO).minus(openingPaid._sum.amount ?? ZERO);
+  const opening = (openingInvoiced._sum.total ?? ZERO)
+    .minus(openingPaid._sum.amount ?? ZERO)
+    .minus(openingCredited._sum.total ?? ZERO)
+    .plus(openingCredited._sum.refund ?? ZERO);
 
   // By date; on the same day invoices come before payments; then by number.
   const rows = [
@@ -367,23 +385,53 @@ export async function statement(companyId: string, customerId: string, periodKey
       amount: p.amount,
       pending: p.status === "pending",
     })),
+    ...creditNotes.map((c) => ({
+      id: c.id,
+      date: toIso(c.date),
+      type: "creditNote" as const,
+      number: c.number,
+      ref: creditNoteNumber(c.number),
+      invoiceRef: `${c.invoice.numberPrefix}${c.invoice.number}`,
+      amount: c.total,
+      pending: false,
+    })),
+    ...creditNotes
+      .filter((c) => c.refund.gt(0))
+      .map((c) => ({
+        id: `${c.id}-refund`,
+        date: toIso(c.date),
+        type: "refund" as const,
+        number: c.number,
+        ref: creditNoteNumber(c.number),
+        invoiceRef: `${c.invoice.numberPrefix}${c.invoice.number}`,
+        amount: c.refund,
+        pending: false,
+      })),
   ].sort(
     (a, b) =>
       (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) ||
-      (a.type === b.type ? 0 : a.type === "invoice" ? -1 : 1) ||
+      ORDER[a.type] - ORDER[b.type] ||
       a.number - b.number,
   );
 
   let balance = opening;
   let invoiced = ZERO;
   let paid = ZERO;
+  let credited = ZERO;
+  let refunded = ZERO;
   const txns = rows.map((row) => {
     if (row.type === "invoice") {
       invoiced = invoiced.plus(row.amount);
       balance = balance.plus(row.amount);
-    } else {
+    } else if (row.type === "payment") {
       paid = paid.plus(row.amount);
       balance = balance.minus(row.amount);
+    } else if (row.type === "creditNote") {
+      credited = credited.plus(row.amount);
+      balance = balance.minus(row.amount);
+    } else {
+      refunded = refunded.plus(row.amount);
+      balance = balance.plus(row.amount);
     }
     return {
       id: row.id,
@@ -404,7 +452,9 @@ export async function statement(companyId: string, customerId: string, periodKey
     opening: moneyString(opening),
     invoiced: moneyString(invoiced),
     paid: moneyString(paid),
-    closing: moneyString(opening.plus(invoiced).minus(paid)),
+    credited: moneyString(credited),
+    refunded: moneyString(refunded),
+    closing: moneyString(opening.plus(invoiced).minus(paid).minus(credited).plus(refunded)),
     txns,
   };
 }

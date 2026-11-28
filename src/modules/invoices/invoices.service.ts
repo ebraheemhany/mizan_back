@@ -67,10 +67,13 @@ function displayStatus(row: { status: InvoiceStatus; dueDate: Date }, today: str
   return { status: row.status, daysOverdue: null };
 }
 
-/** What is still owed: nothing on a cancelled invoice, the full total on a draft. */
-function remainingOf(row: { status: InvoiceStatus; total: Prisma.Decimal; amountPaid: Prisma.Decimal }) {
-  return row.status === "cancelled" ? ZERO : row.total.minus(row.amountPaid);
+/** What is still owed: nothing on a cancelled invoice; the total less payments and credit notes. */
+function remainingOf(row: { status: InvoiceStatus; total: Prisma.Decimal; amountPaid: Prisma.Decimal; credited: Prisma.Decimal }) {
+  return row.status === "cancelled" ? ZERO : row.total.minus(row.amountPaid).minus(row.credited);
 }
+
+/** Shown as CN-0001. */
+export const creditNoteNumber = (n: number) => `CN-${String(n).padStart(4, "0")}`;
 
 // ---------------------------------------------------------------------------
 // Shapes sent to the frontend (money as 2-decimal strings, dates as yyyy-mm-dd)
@@ -87,6 +90,7 @@ const listSelect = {
   customerName: true,
   total: true,
   amountPaid: true,
+  credited: true,
 } satisfies Prisma.InvoiceSelect;
 
 type ListRow = Prisma.InvoiceGetPayload<{ select: typeof listSelect }>;
@@ -179,6 +183,22 @@ const detailSelect = {
     },
   },
   recurring: { select: { id: true, name: true } },
+  creditNotes: {
+    orderBy: [{ date: "desc" }, { number: "desc" }],
+    select: {
+      id: true,
+      number: true,
+      date: true,
+      reason: true,
+      note: true,
+      subtotal: true,
+      vat: true,
+      total: true,
+      refund: true,
+      refundAccount: true,
+      lines: { orderBy: { position: "asc" }, select: { description: true, quantity: true, unitPrice: true, amount: true } },
+    },
+  },
 } satisfies Prisma.InvoiceSelect;
 
 type DetailRow = Prisma.InvoiceGetPayload<{ select: typeof detailSelect }>;
@@ -219,6 +239,26 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
     // Kept for the existing invoice layout; totals are exact, so it is always 0.
     rounding: "0.00",
     note: row.notes,
+    // Taken off by credit notes (returns, discounts after the fact).
+    credited: moneyString(row.credited),
+    creditNotes: row.creditNotes.map((c) => ({
+      id: c.id,
+      number: creditNoteNumber(c.number),
+      date: toIso(c.date),
+      reason: c.reason,
+      note: c.note,
+      subtotal: moneyString(c.subtotal),
+      vat: moneyString(c.vat),
+      total: moneyString(c.total),
+      refund: moneyString(c.refund),
+      refundAccount: c.refundAccount,
+      lines: c.lines.map((l) => ({
+        description: l.description,
+        quantity: l.quantity.toString(),
+        unitPrice: moneyString(l.unitPrice),
+        amount: moneyString(l.amount),
+      })),
+    })),
     payments: row.payments.map((p) => ({
       id: p.id,
       amount: moneyString(p.amount),
@@ -277,7 +317,7 @@ export function parseInvoiceRef(value: unknown): InvoiceRef {
   throw notFound("Invoice");
 }
 
-async function findRow<T extends Prisma.InvoiceSelect>(db: Tx, companyId: string, ref: InvoiceRef, select: T) {
+export async function findRow<T extends Prisma.InvoiceSelect>(db: Tx, companyId: string, ref: InvoiceRef, select: T) {
   const row = await db.invoice.findFirst({ where: { companyId, ...ref }, select });
   if (!row) throw notFound("Invoice");
   return row as Prisma.InvoiceGetPayload<{ select: T }>;
@@ -394,12 +434,12 @@ export async function invoiceStats(companyId: string) {
   const [open, overdue, drafts, collectedNow, collectedBefore] = await Promise.all([
     prisma.invoice.aggregate({
       where: { companyId, status: { in: OPEN } },
-      _sum: { total: true, amountPaid: true },
+      _sum: { total: true, amountPaid: true, credited: true },
       _count: true,
     }),
     prisma.invoice.aggregate({
       where: { companyId, ...overdueWhere(today) },
-      _sum: { total: true, amountPaid: true },
+      _sum: { total: true, amountPaid: true, credited: true },
       _count: true,
     }),
     prisma.invoice.aggregate({ where: { companyId, status: "draft" }, _sum: { total: true }, _count: true }),
@@ -407,8 +447,8 @@ export async function invoiceStats(companyId: string) {
     collected(lastMonth),
   ]);
 
-  const owed = (agg: { _sum: { total: Prisma.Decimal | null; amountPaid: Prisma.Decimal | null } }) =>
-    (agg._sum.total ?? ZERO).minus(agg._sum.amountPaid ?? ZERO);
+  const owed = (agg: { _sum: { total: Prisma.Decimal | null; amountPaid: Prisma.Decimal | null; credited: Prisma.Decimal | null } }) =>
+    (agg._sum.total ?? ZERO).minus(agg._sum.amountPaid ?? ZERO).minus(agg._sum.credited ?? ZERO);
   const now = collectedNow._sum.amount ?? ZERO;
   const before = collectedBefore._sum.amount ?? ZERO;
 
@@ -451,7 +491,7 @@ async function actorName(userId: string) {
 }
 
 /** Adds to (or takes from) what a customer owes, and counts as activity. */
-function moveCustomerBalance(db: Tx, customerId: string, delta: Prisma.Decimal) {
+export function moveCustomerBalance(db: Tx, customerId: string, delta: Prisma.Decimal) {
   return db.customer.update({
     where: { id: customerId },
     data: { balance: { increment: delta }, lastActivityAt: new Date() },
@@ -679,11 +719,11 @@ export async function applyPaymentTx(tx: Tx, actor: PaymentActor, ref: InvoiceRe
   const updated = await tx.$executeRaw`
     UPDATE "invoices"
     SET "amountPaid" = "amountPaid" + ${amount}::numeric,
-        "status" = (CASE WHEN "amountPaid" + ${amount}::numeric = "total" THEN 'paid' ELSE 'partial' END)::"InvoiceStatus",
+        "status" = (CASE WHEN "amountPaid" + ${amount}::numeric + "credited" = "total" THEN 'paid' ELSE 'partial' END)::"InvoiceStatus",
         "updatedAt" = now()
     WHERE "id" = ${row.id}
       AND "status" IN ('sent', 'partial')
-      AND "amountPaid" + ${amount}::numeric <= "total"`;
+      AND "amountPaid" + ${amount}::numeric + "credited" <= "total"`;
   if (updated === 0) {
     throw new AppError(400, "PAYMENT_EXCEEDS_BALANCE", "The payment is more than what is still owed", { field: "amount" });
   }
@@ -805,6 +845,7 @@ export async function bulkCancel(actor: Actor, ids: string[]) {
 const mailSelect = {
   id: true,
   status: true,
+  credited: true,
   number: true,
   numberPrefix: true,
   issueDate: true,
