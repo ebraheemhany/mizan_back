@@ -16,6 +16,7 @@ import {
 } from "../customers/customers.schemas.js";
 import { createDealSchema, loseDealSchema, moveDealSchema, touchDealSchema, updateDealSchema } from "../deals/deals.schemas.js";
 import { createExpenseSchema, listExpensesQuerySchema, payExpenseSchema } from "../expenses/expenses.schemas.js";
+import { cancelSchema as etaCancelSchema } from "../eta/eta.service.js";
 import { createInvitationSchema } from "../invitations/invitations.schemas.js";
 import { creditNoteSchema } from "../invoices/credit-notes.js";
 import {
@@ -134,6 +135,22 @@ const SECTIONS: Section[] = [
         does: "Send a payment reminder by email (channel email). WhatsApp can't be sent from here: give the user the message to send instead.",
         body: reminderSchema,
       },
+    ],
+  },
+  {
+    id: "eta",
+    title: "E-invoicing with the Egyptian Tax Authority (ETA)",
+    note:
+      "Needs issueInvoices. Only once the owner has linked the company to the ETA in /settings (the link itself, with its secrets, is done there, not here). " +
+      ":ref is the invoice number or id; :id a credit note's id.",
+    endpoints: [
+      { method: "GET", path: "/api/eta/invoices/:ref", does: "Where an invoice and its credit notes stand at the ETA (sent, valid, rejected and why)." },
+      { method: "POST", path: "/api/eta/invoices/:ref/submit", does: "Send an issued invoice to the ETA." },
+      { method: "POST", path: "/api/eta/invoices/:ref/refresh", does: "Ask the ETA again for the invoice's status." },
+      { method: "POST", path: "/api/eta/invoices/:ref/cancel", does: "Cancel the invoice at the ETA.", body: etaCancelSchema },
+      { method: "POST", path: "/api/eta/invoices/:ref/credit-notes/:id/submit", does: "Send a credit note to the ETA." },
+      { method: "POST", path: "/api/eta/invoices/:ref/credit-notes/:id/refresh", does: "Ask the ETA again for a credit note's status." },
+      { method: "POST", path: "/api/eta/invoices/:ref/credit-notes/:id/cancel", does: "Cancel a credit note at the ETA.", body: etaCancelSchema },
     ],
   },
   {
