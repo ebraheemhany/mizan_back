@@ -8,6 +8,7 @@ import { payrollCostByMonth, withPayroll } from "../payroll/payroll.service.js";
 import { STALE_DAYS } from "../deals/deals.service.js";
 import { invoiceStats, overdueWhere } from "../invoices/invoices.service.js";
 import { revenueByMonth } from "../reports/revenue.js";
+import { stockNumber } from "../products/stock.js";
 
 const CHART_MONTHS = 6;
 const ATTENTION_LIMIT = 5;
@@ -18,7 +19,7 @@ export async function dashboard(companyId: string, user: { permissions: readonly
   const today = businessToday();
   const thisMonth = monthRange(today);
 
-  const [stats, overdue, invoicesThisMonth, quietDeals] = await Promise.all([
+  const [stats, overdue, invoicesThisMonth, quietDeals, lowStock] = await Promise.all([
     invoiceStats(companyId),
     prisma.invoice.findMany({
       where: { companyId, ...overdueWhere(today) },
@@ -40,6 +41,7 @@ export async function dashboard(companyId: string, user: { permissions: readonly
       orderBy: { lastActivityAt: "asc" },
       take: STALE_DEALS_LIMIT * 2,
     }),
+    lowStockOf(companyId),
   ]);
 
   // Most overdue first.
@@ -78,7 +80,7 @@ export async function dashboard(companyId: string, user: { permissions: readonly
 
   // Revenue and profit are for the roles that may see financial reports.
   if (!can(user, "reports")) {
-    return { financials: null, receivable, attention, invoicesThisMonth };
+    return { financials: null, receivable, attention, invoicesThisMonth, lowStock };
   }
 
   const firstMonth = monthRange(today, -(CHART_MONTHS - 1)).start;
@@ -119,5 +121,26 @@ export async function dashboard(companyId: string, user: { permissions: readonly
     receivable,
     attention,
     invoicesThisMonth,
+    lowStock,
+  };
+}
+
+const LOW_STOCK_LIMIT = 5;
+
+/** Products at or under their alert level, the emptiest first, and how many there are in all. */
+async function lowStockOf(companyId: string) {
+  const where = { companyId, type: "product" as const, stock: { lte: prisma.product.fields.lowStockAt } };
+  const [items, count] = await prisma.$transaction([
+    prisma.product.findMany({
+      where,
+      select: { id: true, name: true, code: true, stock: true, lowStockAt: true },
+      orderBy: [{ stock: "asc" }, { name: "asc" }],
+      take: LOW_STOCK_LIMIT,
+    }),
+    prisma.product.count({ where }),
+  ]);
+  return {
+    count,
+    items: items.map((p) => ({ ...p, stock: stockNumber(p.stock) ?? 0, lowStockAt: stockNumber(p.lowStockAt) ?? 0 })),
   };
 }

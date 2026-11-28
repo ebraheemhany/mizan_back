@@ -31,6 +31,7 @@ type Actor = { id: string; companyId: string };
 /** Who records a payment: a user, or nobody (id null) when Paymob's callback records it. */
 type PaymentActor = { id: string | null; companyId: string };
 type Tx = Prisma.TransactionClient;
+import { linesOf, moveStock, reverseMovements } from "../products/stock.js";
 
 // ---------------------------------------------------------------------------
 // Status: "overdue" is worked out from the due date, never stored
@@ -196,7 +197,7 @@ const detailSelect = {
       total: true,
       refund: true,
       refundAccount: true,
-      lines: { orderBy: { position: "asc" }, select: { description: true, quantity: true, unitPrice: true, amount: true } },
+      lines: { orderBy: { position: "asc" }, select: { description: true, quantity: true, unitPrice: true, amount: true, productId: true } },
     },
   },
 } satisfies Prisma.InvoiceSelect;
@@ -257,6 +258,7 @@ function toDetailDto(row: DetailRow, today: string, { publicView = false } = {})
         quantity: l.quantity.toString(),
         unitPrice: moneyString(l.unitPrice),
         amount: moneyString(l.amount),
+        productId: l.productId,
       })),
     })),
     payments: row.payments.map((p) => ({
@@ -595,8 +597,17 @@ export async function createInvoice(actor: Actor, input: CreateInvoiceInput, ori
         });
       }
 
-      // A draft owes nothing yet; a sent invoice adds its total to the customer's balance.
+      // A draft owes nothing yet; a sent invoice adds its total to the customer's balance,
+      // and its products leave the stock.
       await moveCustomerBalance(tx, customer.id, input.send ? total : ZERO);
+      if (input.send) {
+        await moveStock(tx, actor.companyId, input.items, -1, {
+          kind: "sale",
+          date: input.issueDate,
+          userId: actor.id,
+          invoiceId: invoice.id,
+        });
+      }
       await audit(
         tx,
         actor.companyId,
@@ -653,6 +664,12 @@ export async function sendInvoice(actor: Actor, ref: InvoiceRef) {
     if (count === 0) throw new AppError(409, "INVOICE_NOT_DRAFT", "Only a draft can be sent");
     await tx.invoiceEvent.create({ data: { invoiceId: row.id, type: "sent", userId: actor.id } });
     await moveCustomerBalance(tx, row.customerId, row.total);
+    await moveStock(tx, actor.companyId, await linesOf(tx, row.id), -1, {
+      kind: "sale",
+      date: toIso(row.issueDate),
+      userId: actor.id,
+      invoiceId: row.id,
+    });
     await audit(tx, actor.companyId, {
       action: "send",
       event: "invoiceSent",
@@ -812,8 +829,16 @@ export async function cancelInvoice(actor: Actor, ref: InvoiceRef) {
     if (count === 0) throw notCancellable();
 
     await tx.invoiceEvent.create({ data: { invoiceId: row.id, type: "cancelled", userId: actor.id } });
-    // A sent invoice was counted in the customer's balance; a draft never was.
-    if (row.status === "sent") await moveCustomerBalance(tx, row.customerId, row.total.negated());
+    // A sent invoice was counted in the customer's balance (and took its products out of
+    // stock); a draft never was.
+    if (row.status === "sent") {
+      await moveCustomerBalance(tx, row.customerId, row.total.negated());
+      await reverseMovements(tx, actor.companyId, { invoiceId: row.id, kind: "sale" }, {
+        kind: "saleCancelled",
+        date: businessToday(),
+        userId: actor.id,
+      });
+    }
     await audit(tx, actor.companyId, {
       action: "cancel",
       event: row.status === "draft" ? "draftCancelled" : "invoiceCancelled",

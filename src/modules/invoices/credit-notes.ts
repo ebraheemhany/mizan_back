@@ -7,6 +7,7 @@
 // In the books (ledger.sql): Dr sales, Dr VAT / Cr customers on the note's date, and
 // for a refund Dr customers / Cr the account it came from.
 import { z } from "zod";
+import type { Prisma } from "../../generated/prisma/client.js";
 
 import { businessToday, toDate, toIso } from "../../lib/dates.js";
 import { AppError } from "../../lib/errors.js";
@@ -15,16 +16,19 @@ import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
 import { checkBooksOpen } from "../ledger/ledger.periods.js";
+import { moveStock, quantityString, reverseMovements } from "../products/stock.js";
 import { creditNoteNumber, findRow, getInvoice, moveCustomerBalance, type InvoiceRef } from "./invoices.service.js";
 import { isoDate, lineSchema, optionalText } from "./invoices.schemas.js";
 
 type Actor = { id: string; companyId: string };
+type Tx = Prisma.TransactionClient;
 
 export const creditNoteSchema = z.object({
   date: isoDate,
   reason: z.enum(["return", "discount", "correction", "other"]),
   note: optionalText(300),
-  lines: z.array(lineSchema.omit({ productId: true })).min(1).max(100),
+  // On a return, productId names the invoice's item that came back (it goes back into stock).
+  lines: z.array(lineSchema).min(1).max(100),
   /** Where a refund comes from, when the customer had paid more than is now owed. */
   refundAccount: z.enum(["bank", "cashbox", "wallet"]).optional(),
 });
@@ -67,6 +71,8 @@ export async function createCreditNote(actor: Actor, ref: InvoiceRef, input: Cre
       throw new AppError(400, "CREDIT_NOTE_BEFORE_INVOICE", "The credit note can't be dated before the invoice", { field: "date" });
     }
     checkBooksOpen(company.booksClosedThrough, [input.date]);
+    const returning = input.reason === "return";
+    if (returning) await checkReturnable(tx, invoice.id, input.lines);
 
     const { amounts, subtotal, vat, total } = invoiceTotals(input.lines, invoice.vatRate);
     if (total.lte(0)) throw new AppError(400, "VALIDATION_ERROR", "The credit note has no amount", { field: "lines" });
@@ -111,11 +117,22 @@ export async function createCreditNote(actor: Actor, ref: InvoiceRef, input: Cre
             quantity: line.quantity,
             unitPrice: line.unitPrice,
             amount: amounts[position]!,
+            // Only a return is about the catalog item itself.
+            productId: returning ? (line.productId ?? null) : null,
           })),
         },
       },
       select: { id: true },
     });
+    // What came back goes back into stock, on the note's date.
+    if (returning) {
+      await moveStock(tx, actor.companyId, input.lines, 1, {
+        kind: "returned",
+        date: input.date,
+        userId: actor.id,
+        creditNoteId: note.id,
+      });
+    }
     // Checked again in the update itself: nothing credited or refunded beyond the invoice.
     const updated = await tx.$executeRawUnsafe(
       `UPDATE "invoices"
@@ -156,6 +173,41 @@ export async function createCreditNote(actor: Actor, ref: InvoiceRef, input: Cre
   return getInvoice(actor.companyId, ref);
 }
 
+/**
+ * A return names the invoice's own items, and never more of one than the invoice sold, less
+ * what earlier returns on it already took back.
+ */
+async function checkReturnable(tx: Tx, invoiceId: string, lines: CreditNoteInput["lines"]) {
+  const wanted = new Map<string, Decimal>();
+  for (const line of lines) {
+    if (!line.productId) continue;
+    wanted.set(line.productId, (wanted.get(line.productId) ?? ZERO).plus(new Decimal(line.quantity)));
+  }
+  if (wanted.size === 0) return;
+  const [sold, returned] = await Promise.all([
+    tx.invoiceLine.findMany({ where: { invoiceId, productId: { in: [...wanted.keys()] } }, select: { productId: true, quantity: true } }),
+    tx.creditNoteLine.findMany({
+      where: { creditNote: { invoiceId, reason: "return" }, productId: { in: [...wanted.keys()] } },
+      select: { productId: true, quantity: true },
+    }),
+  ]);
+  const sum = (rows: { productId: string | null; quantity: Decimal }[], id: string) =>
+    rows.filter((r) => r.productId === id).reduce((total, r) => total.plus(r.quantity), ZERO);
+  for (const [productId, quantity] of wanted) {
+    const onInvoice = sum(sold, productId);
+    if (onInvoice.isZero()) {
+      throw new AppError(400, "INVALID_PRODUCT", "A returned item isn't on this invoice", { field: "lines" });
+    }
+    const returnable = onInvoice.minus(sum(returned, productId));
+    if (quantity.gt(returnable)) {
+      throw new AppError(409, "RETURN_EXCEEDS_SOLD", "More is returned than the invoice sold", {
+        productId,
+        returnable: quantityString(Decimal.max(ZERO, returnable)),
+      });
+    }
+  }
+}
+
 /** Undoes a credit note (a mistake): the invoice owes again what it took off, and a refund is taken back. */
 export async function deleteCreditNote(actor: Actor, ref: InvoiceRef, id: string) {
   await prisma.$transaction(async (tx) => {
@@ -172,6 +224,12 @@ export async function deleteCreditNote(actor: Actor, ref: InvoiceRef, id: string
     if (!note) throw notFound("Credit note");
     checkBooksOpen(company.booksClosedThrough, [toIso(note.date)]);
 
+    // Its returns leave the stock again (before the note goes, while the movements name it).
+    await reverseMovements(tx, actor.companyId, { creditNoteId: note.id, kind: "returned" }, {
+      kind: "returnRemoved",
+      date: businessToday(),
+      userId: actor.id,
+    });
     await tx.creditNote.delete({ where: { id: note.id } });
     await tx.$executeRawUnsafe(
       `UPDATE "invoices"

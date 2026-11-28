@@ -146,7 +146,8 @@ describe("GET /api/products (list)", () => {
     expect(codes(await list(owner.token, "?q=srv-00"))).toEqual(["SRV-002", "SRV-001"]);
 
     const filtered = await list(owner.token, "?type=product");
-    expect(filtered.body.counts).toEqual({ all: 3, service: 2, product: 1 });
+    // The product (42 on hand, alert at 10) is not low.
+    expect(filtered.body.counts).toEqual({ all: 3, service: 2, product: 1, low: 0 });
     expect(filtered.body.total).toBe(1);
   });
 

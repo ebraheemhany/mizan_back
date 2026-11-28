@@ -123,6 +123,7 @@ model Company {
   sentNotices       SentNotice[]
   suppliers         Supplier[]
   creditNotes       CreditNote[]
+  stockMovements    StockMovement[]
 
   @@map("companies")
 }
@@ -331,9 +332,9 @@ model Product {
   taxRate  Decimal         @db.Decimal(5, 2)
   category ProductCategory
 
-  // Products only (null for services).
-  stock      Int?
-  lowStockAt Int?
+  // Products only (null for services). Changed only through stock movements, which log why.
+  stock      Decimal? @db.Decimal(14, 3)
+  lowStockAt Decimal? @db.Decimal(14, 3)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -341,9 +342,11 @@ model Product {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  invoiceLines   InvoiceLine[]
-  quoteLines     QuoteLine[]
-  recurringLines RecurringInvoiceLine[]
+  invoiceLines    InvoiceLine[]
+  quoteLines      QuoteLine[]
+  recurringLines  RecurringInvoiceLine[]
+  creditNoteLines CreditNoteLine[]
+  stockMovements  StockMovement[]
 
   @@unique([companyId, code])
   @@index([companyId, createdAt])
@@ -456,6 +459,7 @@ model Invoice {
   paymentClaims  PaymentClaim[]
   onlinePayments OnlinePayment[]
   creditNotes    CreditNote[]
+  stockMovements StockMovement[]
   // The accepted quote this invoice was made from, if any.
   quote          Quote?
 
@@ -1597,6 +1601,7 @@ model CreditNote {
   customerId String
   customer   Customer         @relation(fields: [customerId], references: [id], onDelete: NoAction)
   lines      CreditNoteLine[]
+  stockMovements StockMovement[]
 
   @@unique([companyId, number])
   @@index([invoiceId])
@@ -1614,7 +1619,58 @@ model CreditNoteLine {
 
   creditNoteId String
   creditNote   CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  // The catalog item returned (a return puts it back in stock).
+  productId    String?
+  product      Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@index([creditNoteId])
   @@map("credit_note_lines")
+}
+
+/// Why a product's stock moved.
+enum StockMovementKind {
+  /// What was on hand when the product was added.
+  opening
+  /// Sold on an issued invoice (negative).
+  sale
+  /// The invoice it was sold on was cancelled (positive).
+  saleCancelled
+  /// Came back on a credit note (positive).
+  returned
+  /// That credit note was deleted (negative).
+  returnRemoved
+  /// Goods received (bought, made) (positive).
+  received
+  /// A count found a different quantity: the difference.
+  counted
+  /// Damaged, lost or used (negative).
+  damaged
+}
+
+/// Every change to a product's stock, with the balance after it.
+model StockMovement {
+  id       String            @id @default(uuid())
+  kind     StockMovementKind
+  date     DateTime          @db.Date
+  /// Signed: + in, - out.
+  quantity Decimal           @db.Decimal(14, 3)
+  /// The product's stock right after this movement.
+  balance  Decimal           @db.Decimal(14, 3)
+  note     String?
+
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdById String?
+
+  companyId    String
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  invoiceId    String?
+  invoice      Invoice?    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  creditNoteId String?
+  creditNote   CreditNote? @relation(fields: [creditNoteId], references: [id], onDelete: SetNull)
+
+  @@index([productId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("stock_movements")
 }

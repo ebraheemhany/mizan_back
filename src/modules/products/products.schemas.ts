@@ -15,7 +15,11 @@ const decimal = (maxIntegerDigits: number) =>
 
 const price = decimal(12);
 const taxRate = decimal(3).refine((v) => Number(v) <= 100, "Must be between 0 and 100");
-const count = z.coerce.number().int().min(0).max(1_000_000_000);
+/** Stock quantities: kilos and metres too, so up to 3 decimals. */
+const count = z.preprocess(
+  (v) => (typeof v === "number" ? String(v) : typeof v === "string" ? v.trim().replace(/,/g, "") : v),
+  z.string().regex(/^\d{1,10}(\.\d{1,3})?$/, "Must be a non-negative number with up to 3 decimals"),
+);
 
 const fields = {
   name: z.string().trim().min(1).max(120),
@@ -41,6 +45,8 @@ export const listProductsQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
   type: z.enum(["all", ...productTypes]).default("all"),
   category: z.enum(["all", ...productCategories]).default("all"),
+  // low: products at or under their alert level (out of stock included).
+  stock: z.enum(["all", "low"]).default("all"),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });

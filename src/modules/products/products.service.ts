@@ -4,6 +4,9 @@ import { AppError } from "../../lib/errors.js";
 import { notFound } from "../../lib/params.js";
 import { prisma } from "../../lib/prisma.js";
 import { audit, changedFields } from "../audit/audit.service.js";
+import { businessToday } from "../../lib/dates.js";
+import { Decimal } from "../../lib/money.js";
+import { moveStock, stockNumber } from "./stock.js";
 import {
   createProductSchema,
   type CreateProductInput,
@@ -34,6 +37,8 @@ function toDto(row: ProductRow) {
     ...row,
     price: row.price.toFixed(2),
     taxRate: row.taxRate.toFixed(2),
+    stock: stockNumber(row.stock),
+    lowStockAt: stockNumber(row.lowStockAt),
     // How many invoices and quotes use it; counted once invoices exist.
     usageCount: 0,
   };
@@ -46,12 +51,20 @@ const codeTaken = (code: string) =>
 
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 
-/** Services have no stock; products always do (0 when not given). */
-function stockFor(type: ProductType, stock: number | undefined, lowStockAt: number | undefined) {
-  return type === "service"
-    ? { stock: null, lowStockAt: null }
-    : { stock: stock ?? 0, lowStockAt: lowStockAt ?? 0 };
+/**
+ * Services have no stock; products start at 0 (the opening quantity is then added as a
+ * logged movement). The alert level is 0 when not given.
+ */
+function stockFor(type: ProductType, lowStockAt: string | Prisma.Decimal | null | undefined) {
+  return type === "service" ? { stock: null, lowStockAt: null } : { stock: 0, lowStockAt: lowStockAt ?? 0 };
 }
+
+/** Products at or under their alert level (where the alert level is above zero, or none is left). */
+const lowWhere = (companyId: string): Prisma.ProductWhereInput => ({
+  companyId,
+  type: "product",
+  stock: { lte: prisma.product.fields.lowStockAt },
+});
 
 // ---------------------------------------------------------------------------
 // Read
@@ -61,13 +74,14 @@ export async function listProducts(companyId: string, query: ListProductsQuery) 
   const and: Prisma.ProductWhereInput[] = [{ companyId }];
   if (query.type !== "all") and.push({ type: query.type });
   if (query.category !== "all") and.push({ category: query.category });
+  if (query.stock === "low") and.push(lowWhere(companyId));
   if (query.q) {
     const contains = { contains: query.q, mode: "insensitive" } as const;
     and.push({ OR: [{ name: contains }, { code: contains }] });
   }
   const where = { AND: and } satisfies Prisma.ProductWhereInput;
 
-  const [rows, total, all, service, product] = await prisma.$transaction([
+  const [rows, total, all, service, product, low] = await prisma.$transaction([
     prisma.product.findMany({
       where,
       select: productSelect,
@@ -80,6 +94,7 @@ export async function listProducts(companyId: string, query: ListProductsQuery) 
     prisma.product.count({ where: { companyId } }),
     prisma.product.count({ where: { companyId, type: "service" } }),
     prisma.product.count({ where: { companyId, type: "product" } }),
+    prisma.product.count({ where: lowWhere(companyId) }),
   ]);
 
   return {
@@ -87,7 +102,7 @@ export async function listProducts(companyId: string, query: ListProductsQuery) 
     total,
     page: query.page,
     pageSize: query.pageSize,
-    counts: { all, service, product },
+    counts: { all, service, product, low },
   };
 }
 
@@ -115,7 +130,7 @@ export async function nextCode(companyId: string, type: ProductType) {
 // Write
 // ---------------------------------------------------------------------------
 
-export async function createProduct(companyId: string, input: CreateProductInput) {
+export async function createProduct(companyId: string, input: CreateProductInput, userId: string | null = null) {
   try {
     const row = await prisma.$transaction(async (tx) => {
       const created = await tx.product.create({
@@ -126,18 +141,27 @@ export async function createProduct(companyId: string, input: CreateProductInput
           price: input.price,
           taxRate: input.taxRate,
           category: input.category,
-          ...stockFor(input.type, input.stock, input.lowStockAt),
+          ...stockFor(input.type, input.lowStockAt),
           companyId,
         },
-        select: productSelect,
+        select: { id: true },
       });
+      // What's on hand when it's added opens its stock log.
+      if (input.type === "product" && input.stock !== undefined) {
+        await moveStock(tx, companyId, [{ productId: created.id, quantity: input.stock }], 1, {
+          kind: "opening",
+          date: businessToday(),
+          userId,
+        });
+      }
+      const row = await tx.product.findUniqueOrThrow({ where: { id: created.id }, select: productSelect });
       await audit(tx, companyId, {
         action: "create",
         event: "productCreated",
-        item: { type: "product", id: created.id, ref: created.name },
-        values: { code: created.code, price: String(created.price) },
+        item: { type: "product", id: row.id, ref: row.name },
+        values: { code: row.code, price: String(row.price) },
       });
-      return created;
+      return row;
     });
     return toDto(row);
   } catch (err) {
@@ -146,7 +170,7 @@ export async function createProduct(companyId: string, input: CreateProductInput
   }
 }
 
-export async function updateProduct(companyId: string, id: string, input: UpdateProductInput) {
+export async function updateProduct(companyId: string, id: string, input: UpdateProductInput, userId: string | null = null) {
   const existing = await prisma.product.findFirst({
     where: { id, companyId },
     select: { type: true, stock: true, lowStockAt: true, name: true, code: true, price: true, taxRate: true, category: true },
@@ -154,9 +178,15 @@ export async function updateProduct(companyId: string, id: string, input: Update
   if (!existing) throw notFound("Product");
 
   const type = input.type ?? existing.type;
-  const stock = stockFor(type, input.stock ?? existing.stock ?? undefined, input.lowStockAt ?? existing.lowStockAt ?? undefined);
-
-  const data: Prisma.ProductUpdateInput = { ...stock, type };
+  const data: Prisma.ProductUpdateInput = { type };
+  if (type === "service") {
+    data.stock = null;
+    data.lowStockAt = null;
+  } else {
+    // Becoming a product starts its stock at 0; the stock itself only moves through movements.
+    if (existing.type === "service") data.stock = 0;
+    data.lowStockAt = input.lowStockAt ?? existing.lowStockAt ?? 0;
+  }
   if (input.name !== undefined) data.name = input.name;
   if (input.code !== undefined) data.code = input.code;
   if (input.price !== undefined) data.price = input.price;
@@ -165,7 +195,21 @@ export async function updateProduct(companyId: string, id: string, input: Update
 
   try {
     const row = await prisma.$transaction(async (tx) => {
-      const updated = await tx.product.update({ where: { id }, data, select: productSelect });
+      await tx.product.update({ where: { id }, data, select: { id: true } });
+      // A new stock figure typed in the form: the difference is logged (as a count, or as the
+      // opening quantity of what just became a product).
+      if (type === "product" && input.stock !== undefined) {
+        const current = existing.type === "service" ? new Decimal(0) : new Decimal(existing.stock ?? 0);
+        const delta = new Decimal(input.stock).minus(current);
+        if (!delta.isZero()) {
+          await moveStock(tx, companyId, [{ productId: id, quantity: delta }], 1, {
+            kind: existing.type === "service" ? "opening" : "counted",
+            date: businessToday(),
+            userId,
+          });
+        }
+      }
+      const updated = await tx.product.findUniqueOrThrow({ where: { id }, select: productSelect });
       const fields = changedFields(existing as Record<string, unknown>, input as Record<string, unknown>);
       if (fields.length > 0) {
         await audit(tx, companyId, {
@@ -204,7 +248,7 @@ export async function deleteProduct(companyId: string, id: string) {
  * or reuses a code (from the file or already in the catalog), nothing is saved
  * and the error lists every bad row by number.
  */
-export async function importProducts(companyId: string, rows: unknown[]) {
+export async function importProducts(companyId: string, rows: unknown[], userId: string | null = null) {
   const valid: CreateProductInput[] = [];
   const rowErrors: { row: number; fieldErrors: Record<string, string[] | undefined> }[] = [];
 
@@ -241,18 +285,28 @@ export async function importProducts(companyId: string, rows: unknown[]) {
 
   try {
     const { count } = await prisma.$transaction(async (tx) => {
-      const created = await tx.product.createMany({
+      const rows = await tx.product.createManyAndReturn({
         data: valid.map((p) => ({
-        name: p.name,
-        type: p.type,
-        code: p.code,
-        price: p.price,
-        taxRate: p.taxRate,
-        category: p.category,
-          ...stockFor(p.type, p.stock, p.lowStockAt),
+          name: p.name,
+          type: p.type,
+          code: p.code,
+          price: p.price,
+          taxRate: p.taxRate,
+          category: p.category,
+          ...stockFor(p.type, p.lowStockAt),
           companyId,
         })),
+        select: { id: true, code: true },
       });
+      // Each product's quantity in the file opens its stock log.
+      const stockByCode = new Map(valid.map((p) => [p.code, p.type === "product" ? p.stock : undefined]));
+      const date = businessToday();
+      for (const row of rows) {
+        const quantity = stockByCode.get(row.code);
+        if (quantity === undefined) continue;
+        await moveStock(tx, companyId, [{ productId: row.id, quantity }], 1, { kind: "opening", date, userId });
+      }
+      const created = { count: rows.length };
       await audit(tx, companyId, {
         action: "create",
         event: "productsImported",
