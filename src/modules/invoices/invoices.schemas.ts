@@ -3,7 +3,7 @@ import { email, locale } from "../auth/auth.schemas.js";
 import { isIsoDate } from "../../lib/dates.js";
 
 /** A calendar date, "yyyy-mm-dd". */
-export const isoDate = z.string().refine(isIsoDate, "Must be a date like 2026-10-13");
+export const isoDate = z.string().refine(isIsoDate, "Must be a date like 2026-10-13").describe("yyyy-mm-dd");
 
 /** A non-negative decimal sent as a string or number; kept as a string so nothing is rounded early. */
 const decimal = (maxDecimals: number) =>

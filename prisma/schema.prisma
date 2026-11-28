@@ -124,6 +124,8 @@ model Company {
   suppliers         Supplier[]
   creditNotes       CreditNote[]
   stockMovements    StockMovement[]
+  assistantChats    AssistantConversation[]
+  assistantUsage    AssistantUsage[]
 
   @@map("companies")
 }
@@ -197,6 +199,7 @@ model User {
   billingPayments   BillingPayment[]
   accountTokens     AccountToken[]
   reviewedClaims    PaymentClaim[]
+  assistantChats    AssistantConversation[]
 
   @@index([companyId])
   @@index([customRoleId])
@@ -1673,4 +1676,52 @@ model StockMovement {
   @@index([productId, createdAt])
   @@index([companyId, createdAt])
   @@map("stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// The assistant (Claude inside Mizan): each user's conversations, and how much
+// of it the company used each month (for the plan's limit and what it costs).
+// ---------------------------------------------------------------------------
+
+model AssistantConversation {
+  id        String    @id @default(uuid())
+  title     String
+  // The conversation as the Claude Messages API takes it: user and assistant turns,
+  // tool calls and their results. Only ever appended to (never edited).
+  messages  Json      @default("[]")
+  // Changes the assistant proposed in its last turn, waiting for the user to confirm.
+  pending   Json?
+  // Set while a turn runs, so two at once on one conversation can't happen.
+  busySince DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+  @@index([companyId])
+  @@map("assistant_conversations")
+}
+
+model AssistantUsage {
+  id               String   @id @default(uuid())
+  // "2026-11" (Cairo calendar).
+  month            String
+  // What the users sent (the plan's limit counts these).
+  messages         Int      @default(0)
+  // What Claude read and wrote, for the cost.
+  inputTokens      Int      @default(0)
+  cacheReadTokens  Int      @default(0)
+  cacheWriteTokens Int      @default(0)
+  outputTokens     Int      @default(0)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, month])
+  @@map("assistant_usage")
 }

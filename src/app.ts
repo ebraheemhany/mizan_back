@@ -37,6 +37,7 @@ import {
 } from "./modules/collections/collections.routes.js";
 import { createUsersRouter } from "./modules/users/users.routes.js";
 import { createRolesRouter } from "./modules/roles/roles.routes.js";
+import { createAssistantRouter } from "./modules/assistant/assistant.routes.js";
 
 type AppOptions = {
   /** Turn rate limiting off (used by tests that make many requests from one IP). */
@@ -99,6 +100,8 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/public/paymob", createPaymobWebhookRouter());
   app.use("/api/quotes", createQuotesRouter(limiters));
   app.use("/api/public/quotes", createPublicQuotesRouter(limiters));
+  // The assistant (Claude): answers and does things as the signed-in user, with confirmation.
+  app.use("/api/assistant", createAssistantRouter());
   // Mizan's own staff: every company, its plan and usage (PLATFORM_ADMIN_EMAILS).
   app.use("/api/admin", createAdminRouter());
 

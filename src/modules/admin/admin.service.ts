@@ -280,6 +280,7 @@ export async function getCompany(id: string) {
   ]);
 
   const memberIds = members.map((m) => m.id);
+  const assistant = await prisma.assistantUsage.findUnique({ where: { companyId_month: { companyId: id, month: businessToday().slice(0, 7) } } });
   const [lastSessions, desktopUsers] = await Promise.all([
     prisma.refreshToken.groupBy({ by: ["userId"], where: { userId: { in: memberIds } }, _max: { createdAt: true } }),
     prisma.auditEvent.findMany({
@@ -313,6 +314,8 @@ export async function getCompany(id: string) {
       price: plan.price,
       users: { used: members.length, limit: plan.users },
       invoicesThisMonth: { used: invoicesThisMonth, limit: plan.invoicesPerMonth },
+      // The assistant (Claude): messages against the plan, and the tokens Mizan pays for.
+      assistantThisMonth: { used: assistant?.messages ?? 0, limit: plan.assistantMessages, tokens: assistantTokens(assistant) },
     },
     subscription: subscription
       ? {
@@ -484,4 +487,11 @@ export async function endSubscription(companyId: string, input: EndSubscriptionI
   });
 
   return getCompany(companyId);
+}
+
+/** What the assistant read and wrote this month (null: not used). */
+function assistantTokens(row: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number } | null) {
+  return row
+    ? { input: row.inputTokens, output: row.outputTokens, cacheRead: row.cacheReadTokens, cacheWrite: row.cacheWriteTokens }
+    : null;
 }

@@ -41,6 +41,8 @@ export default defineConfig({
       PAYMOB_MOTO_INTEGRATION_ID: "",
       // Signs the Paymob callbacks the tests send.
       PAYMOB_HMAC_SECRET: "test-hmac-secret",
+      // Claude is scripted in the tests (setModelForTests); never the real API.
+      ANTHROPIC_API_KEY: "",
       DATABASE_URL: testDatabaseUrl,
     },
   },

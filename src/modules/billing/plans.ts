@@ -17,6 +17,8 @@ export type Plan = {
   recurring: boolean;
   /** Employees and payroll. */
   payroll: boolean;
+  /** Messages to the assistant (Claude) a calendar month, the whole company. */
+  assistantMessages: number;
 };
 
 export const PLANS: Record<PlanId, Plan> = {
@@ -27,6 +29,7 @@ export const PLANS: Record<PlanId, Plan> = {
     invoicesPerMonth: 100,
     recurring: false,
     payroll: false,
+    assistantMessages: 20,
   },
   pro: {
     id: "pro",
@@ -35,6 +38,7 @@ export const PLANS: Record<PlanId, Plan> = {
     invoicesPerMonth: null,
     recurring: true,
     payroll: true,
+    assistantMessages: 200,
   },
   business: {
     id: "business",
@@ -43,6 +47,7 @@ export const PLANS: Record<PlanId, Plan> = {
     invoicesPerMonth: null,
     recurring: true,
     payroll: true,
+    assistantMessages: 1000,
   },
 };
 

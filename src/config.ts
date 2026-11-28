@@ -48,6 +48,11 @@ const envSchema = z.object({
   // value as the frontend's NEXT_PUBLIC_GOOGLE_CLIENT_ID). Empty: the option is off.
   GOOGLE_CLIENT_ID: optionalText,
   MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
+  // The in-app assistant (Claude). Without a key the assistant is off (the app hides it).
+  ANTHROPIC_API_KEY: optionalText,
+  // Which Claude model answers, and how hard it thinks (low = cheaper and faster).
+  ASSISTANT_MODEL: z.string().trim().min(1).default("claude-opus-5-5"),
+  ASSISTANT_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
   // Subscriptions through Paymob (Egypt). Without the keys, development uses a
   // local test checkout page instead; production refuses to take payments.
   PAYMOB_SECRET_KEY: z
