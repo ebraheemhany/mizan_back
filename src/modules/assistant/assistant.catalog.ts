@@ -142,7 +142,9 @@ const SECTIONS: Section[] = [
     title: "E-invoicing with the Egyptian Tax Authority (ETA)",
     note:
       "Needs issueInvoices. Only once the owner has linked the company to the ETA in /settings (the link itself, with its secrets, is done there, not here). " +
-      ":ref is the invoice number or id; :id a credit note's id.",
+      ":ref is the invoice number or id; :id a credit note's id. " +
+      "A submit refused with 400 ETA_NOT_READY lists in details.problems what is missing (on the customer, a line or a product): " +
+      "tell the user what to fill in, or propose those fixes; don't submit again until they are done.",
     endpoints: [
       { method: "GET", path: "/api/eta/invoices/:ref", does: "Where an invoice and its credit notes stand at the ETA (sent, valid, rejected and why)." },
       { method: "POST", path: "/api/eta/invoices/:ref/submit", does: "Send an issued invoice to the ETA." },
