@@ -97,6 +97,8 @@ model Company {
   subscription      Subscription?
   billingPayments   BillingPayment[]
   paymentSetup      PaymentSetup?
+  etaSetup          EtaSetup?
+  etaSubmissions    EtaSubmission[]
   paymentClaims     PaymentClaim[]
   onlinePayments    OnlinePayment[]
   auditEvents       AuditEvent[]
@@ -216,6 +218,16 @@ model Customer {
   city        String?
   taxNumber   String?
   notes       String?
+
+  // E-invoicing (ETA): B = a business (taxNumber is its registration number), P = a person
+  // (nationalId, needed above ETA's limit), F = abroad. Null: B with a tax number, else P.
+  etaType        EtaPartyType?
+  nationalId     String?
+  // The address ETA asks for (city above is the region/city).
+  country        String?
+  governorate    String?
+  street         String?
+  buildingNumber String?
 
   // What the customer owes. Kept up to date by invoices and payments (coming
   // later); 0 until then. Stored, not computed, so lists can sort/filter on it.
@@ -338,6 +350,12 @@ model Product {
   // Products only (null for services). Changed only through stock movements, which log why.
   stock      Decimal? @db.Decimal(14, 3)
   lowStockAt Decimal? @db.Decimal(14, 3)
+
+  // E-invoicing (ETA): a GS1 barcode or the company's registered EGS code, and the unit
+  // (ETA unit code: EA, KGM, MTR...).
+  etaCodeType EtaCodeType?
+  etaCode     String?
+  etaUnit     String?
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -463,6 +481,7 @@ model Invoice {
   onlinePayments OnlinePayment[]
   creditNotes    CreditNote[]
   stockMovements StockMovement[]
+  etaSubmissions EtaSubmission[]
   // The accepted quote this invoice was made from, if any.
   quote          Quote?
 
@@ -1605,6 +1624,7 @@ model CreditNote {
   customer   Customer         @relation(fields: [customerId], references: [id], onDelete: NoAction)
   lines      CreditNoteLine[]
   stockMovements StockMovement[]
+  etaSubmissions EtaSubmission[]
 
   @@unique([companyId, number])
   @@index([invoiceId])
@@ -1724,4 +1744,109 @@ model AssistantUsage {
 
   @@unique([companyId, month])
   @@map("assistant_usage")
+}
+
+// ---------------------------------------------------------------------------
+// E-invoicing (Egyptian Tax Authority, ETA)
+// ---------------------------------------------------------------------------
+
+enum EtaPartyType {
+  B
+  P
+  F
+}
+
+enum EtaCodeType {
+  GS1
+  EGS
+}
+
+enum EtaEnvironment {
+  preprod
+  production
+}
+
+/// What ETA said about a document: submitted (being checked), valid, invalid (failed its
+/// checks after submission), rejected (refused at submission), cancelled.
+enum EtaStatus {
+  submitted
+  valid
+  invalid
+  rejected
+  cancelled
+}
+
+/// A company's link to ETA: its ERP credentials (the secret stored sealed, lib/secret-box) and
+/// the issuer details ETA needs (the tax registration number is Company.taxNumber).
+model EtaSetup {
+  companyId String  @id
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  environment  EtaEnvironment @default(preprod)
+  clientId     String?
+  clientSecret String?
+  // The company's activity code at ETA (taxpayerActivityCode, 4 digits).
+  activityCode String?
+
+  // The issuing branch: "0" is the main one.
+  branchId       String  @default("0")
+  country        String  @default("EG")
+  governorate    String?
+  regionCity     String?
+  street         String?
+  buildingNumber String?
+  postalCode     String?
+  floor          String?
+  room           String?
+  landmark       String?
+  additionalInfo String?
+
+  // For invoice lines not linked to a catalog item (or items with no code of their own):
+  // one code the company registered at ETA, e.g. its general "services" EGS code.
+  defaultCodeType EtaCodeType?
+  defaultCode     String?
+  defaultUnit     String       @default("EA")
+
+  // When the credentials last got a token from ETA.
+  verifiedAt DateTime? @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@map("eta_setups")
+}
+
+/// One sending of an invoice or a credit note to ETA, with what ETA answered. The latest
+/// one of a document is its state at ETA; earlier ones stay for the record.
+model EtaSubmission {
+  id          String         @id @default(uuid())
+  environment EtaEnvironment
+  status      EtaStatus
+  // What ETA gave the document (uuid, longId) and the submission.
+  uuid         String?
+  longId       String?
+  submissionId String?
+  // Our number for it (INV-12, CN-0003): ETA's internalID.
+  internalId   String
+  // ETA's reasons when rejected or invalid: [{ code, message, target, path }].
+  errors       Json?
+  // The document as sent (without secrets), for the record and support.
+  document     Json
+  submittedAt  DateTime  @default(now()) @db.Timestamptz(3)
+  checkedAt    DateTime? @db.Timestamptz(3)
+  // Cancelling at ETA is a request: the status turns cancelled once ETA applies it.
+  cancelRequestedAt DateTime? @db.Timestamptz(3)
+  // ETA's totals for the document (5 decimals), which can differ from ours by fractions of a piaster.
+  total        Decimal?  @db.Decimal(19, 5)
+  createdById  String?
+
+  companyId    String
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoiceId    String?
+  invoice      Invoice?    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  creditNoteId String?
+  creditNote   CreditNote? @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, submittedAt])
+  @@index([creditNoteId, submittedAt])
+  @@index([companyId, status])
+  @@map("eta_submissions")
 }

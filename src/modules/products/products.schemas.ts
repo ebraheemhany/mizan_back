@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ETA_UNIT_CODES } from "../eta/eta.codes.js";
 
 export const productTypes = ["service", "product"] as const;
 export const productCategories = ["software", "support", "consulting", "devices", "network", "accessories"] as const;
@@ -36,6 +37,17 @@ const fields = {
   // Products only; ignored (stored as null) for services.
   stock: count.optional(),
   lowStockAt: count.optional(),
+  // E-invoicing (ETA): a GS1 barcode or the company's approved EGS code (EG-<tax no.>-<code>),
+  // and the ETA unit (EA, KGM, M...). Empty clears them.
+  etaCodeType: z.preprocess((v) => (v === "" ? null : v), z.enum(["GS1", "EGS"]).nullable().optional()),
+  etaCode: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() || null : v),
+    z.string().max(100).regex(/^[A-Za-z0-9-]+$/, "Letters, digits and dashes").nullable().optional(),
+  ),
+  etaUnit: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim() || null : v),
+    z.string().refine((v) => ETA_UNIT_CODES.has(v), "Not an ETA unit code").nullable().optional(),
+  ),
 };
 
 export const createProductSchema = z.object(fields);

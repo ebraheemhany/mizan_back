@@ -32,6 +32,7 @@ type Actor = { id: string; companyId: string };
 type PaymentActor = { id: string | null; companyId: string };
 type Tx = Prisma.TransactionClient;
 import { linesOf, moveStock, reverseMovements } from "../products/stock.js";
+import { assertNotAtEta } from "../eta/eta.guard.js";
 
 // ---------------------------------------------------------------------------
 // Status: "overdue" is worked out from the due date, never stored
@@ -819,6 +820,8 @@ export async function cancelInvoice(actor: Actor, ref: InvoiceRef) {
       customerName: true,
     });
     if ((row.status !== "draft" && row.status !== "sent") || !row.amountPaid.isZero()) throw notCancellable();
+    // Registered at the tax authority: cancelled there first.
+    await assertNotAtEta(tx, { invoiceId: row.id });
     if (row.status === "sent") checkBooksOpen(closedThrough, [toIso(row.issueDate)]);
 
     // Same status and still nothing paid, checked in the update itself.

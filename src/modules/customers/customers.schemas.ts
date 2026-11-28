@@ -22,6 +22,14 @@ const customerFields = {
   taxNumber: optional(z.string().max(30)),
   notes: optional(z.string().max(500)),
   assignedToId: optional(z.uuid()),
+  // E-invoicing (ETA): B business, P person, F abroad; null = B with a tax number, else P.
+  etaType: optional(z.enum(["B", "P", "F"])),
+  // A person's 14-digit national ID (ETA asks for it above its limit).
+  nationalId: optional(z.string().regex(/^\d{14}$/, "A national ID is 14 digits")),
+  country: optional(z.string().regex(/^[A-Za-z]{2}$/, "A 2-letter country code").transform((v) => v.toUpperCase())),
+  governorate: optional(z.string().max(100)),
+  street: optional(z.string().max(200)),
+  buildingNumber: optional(z.string().max(100)),
 };
 
 export const createCustomerSchema = z.object(customerFields);

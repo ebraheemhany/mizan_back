@@ -12,6 +12,7 @@ import { createDashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { createExpensesRouter } from "./modules/expenses/expenses.routes.js";
 import { createSuppliersRouter } from "./modules/suppliers/suppliers.routes.js";
 import { createInvoicesRouter, createPublicInvoicesRouter } from "./modules/invoices/invoices.routes.js";
+import { createEtaRouter } from "./modules/eta/eta.routes.js";
 import { createPaymentsRouter } from "./modules/payments/payments.routes.js";
 import { createProductsRouter } from "./modules/products/products.routes.js";
 import { createPublicQuotesRouter, createQuotesRouter } from "./modules/quotes/quotes.routes.js";
@@ -74,6 +75,7 @@ export function createApp({ rateLimit = true }: AppOptions = {}) {
   app.use("/api/products", createProductsRouter());
   app.use("/api/settings", createSettingsRouter());
   app.use("/api/invoices", createInvoicesRouter(limiters));
+  app.use("/api/eta", createEtaRouter());
   app.use("/api/public/invoices", createPublicInvoicesRouter());
   // Paying on the invoice link: receipts for transfers, and card payments.
   app.use("/api/public/invoices", createPublicPaymentRouter(limiters));

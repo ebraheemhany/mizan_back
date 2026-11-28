@@ -17,6 +17,7 @@ import { prisma } from "../../lib/prisma.js";
 import { audit } from "../audit/audit.service.js";
 import { checkBooksOpen } from "../ledger/ledger.periods.js";
 import { moveStock, quantityString, reverseMovements } from "../products/stock.js";
+import { assertNotAtEta } from "../eta/eta.guard.js";
 import { creditNoteNumber, findRow, getInvoice, moveCustomerBalance, type InvoiceRef } from "./invoices.service.js";
 import { isoDate, lineSchema, optionalText } from "./invoices.schemas.js";
 
@@ -223,6 +224,8 @@ export async function deleteCreditNote(actor: Actor, ref: InvoiceRef, id: string
     });
     if (!note) throw notFound("Credit note");
     checkBooksOpen(company.booksClosedThrough, [toIso(note.date)]);
+    // Registered at the tax authority: cancelled there first.
+    await assertNotAtEta(tx, { creditNoteId: note.id });
 
     // Its returns leave the stock again (before the note goes, while the movements name it).
     await reverseMovements(tx, actor.companyId, { creditNoteId: note.id, kind: "returned" }, {

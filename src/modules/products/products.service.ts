@@ -26,6 +26,9 @@ const productSelect = {
   category: true,
   stock: true,
   lowStockAt: true,
+  etaCodeType: true,
+  etaCode: true,
+  etaUnit: true,
   createdAt: true,
 } satisfies Prisma.ProductSelect;
 
@@ -57,6 +60,15 @@ const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKn
  */
 function stockFor(type: ProductType, lowStockAt: string | Prisma.Decimal | null | undefined) {
   return type === "service" ? { stock: null, lowStockAt: null } : { stock: 0, lowStockAt: lowStockAt ?? 0 };
+}
+
+/** The ETA code and unit as given (undefined = leave as is, null = clear). */
+function etaFields(input: Pick<UpdateProductInput, "etaCodeType" | "etaCode" | "etaUnit">) {
+  const out: { etaCodeType?: "GS1" | "EGS" | null; etaCode?: string | null; etaUnit?: string | null } = {};
+  if (input.etaCodeType !== undefined) out.etaCodeType = input.etaCodeType;
+  if (input.etaCode !== undefined) out.etaCode = input.etaCode;
+  if (input.etaUnit !== undefined) out.etaUnit = input.etaUnit;
+  return out;
 }
 
 /** Products at or under their alert level (where the alert level is above zero, or none is left). */
@@ -142,6 +154,7 @@ export async function createProduct(companyId: string, input: CreateProductInput
           taxRate: input.taxRate,
           category: input.category,
           ...stockFor(input.type, input.lowStockAt),
+          ...etaFields(input),
           companyId,
         },
         select: { id: true },
@@ -192,6 +205,7 @@ export async function updateProduct(companyId: string, id: string, input: Update
   if (input.price !== undefined) data.price = input.price;
   if (input.taxRate !== undefined) data.taxRate = input.taxRate;
   if (input.category !== undefined) data.category = input.category;
+  Object.assign(data, etaFields(input));
 
   try {
     const row = await prisma.$transaction(async (tx) => {
@@ -294,6 +308,7 @@ export async function importProducts(companyId: string, rows: unknown[], userId:
           taxRate: p.taxRate,
           category: p.category,
           ...stockFor(p.type, p.lowStockAt),
+          ...etaFields(p),
           companyId,
         })),
         select: { id: true, code: true },
