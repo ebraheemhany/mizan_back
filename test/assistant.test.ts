@@ -121,11 +121,11 @@ async function customer(token: string, name: string) {
 describe("the API list", () => {
   it("lists only real endpoints, and the assistant may call nothing else", async () => {
     const { token } = await ownerSession();
-    // The prompt has one line per endpoint; the bodies come from the docs tool.
+    // The prompt has the paths only; what they do and their fields come from the docs tool.
     const index = apiIndex();
-    expect(index).toContain("POST /api/invoices — ");
+    expect(index).toContain("GET|POST /api/invoices\n");
     expect(index).not.toContain("customerId: uuid");
-    expect(index.length).toBeLessThan(16_000);
+    expect(index.length).toBeLessThan(6_000);
     expect(apiDocs(["invoices"])).toContain("customerId: uuid, issueDate: date");
     expect(apiDocs(["nope"])).toContain("No such section");
 
@@ -337,6 +337,23 @@ describe("the assistant", () => {
     expect(await prisma.assistantConversation.count()).toBe(0);
   });
 
+  it("sends earlier messages' results shortened (the record keeps them whole)", async () => {
+    const { token } = await ownerSession();
+    for (const name of ["شركة النور", "مكتبة الأمل", "مصنع الفجر", "شركة السلام", "مؤسسة الرواد"]) await customer(token, name);
+    const list = read("/api/customers", { pageSize: 20 });
+    script(say(list), say(text("عندك 5 عملاء.")));
+    const id = events(await ask(token, { text: "مين عملائي؟" }))[0]!.id as string;
+
+    const requests = script(say(text("تمام.")));
+    events(await ask(token, { text: "شكراً" }, id));
+    const earlier = resultOf(requests[0]!, list);
+    expect(earlier.length).toBeLessThan(700);
+    expect(earlier).toContain("shortened");
+    const stored = await prisma.assistantConversation.findUniqueOrThrow({ where: { id } });
+    const whole = (stored.messages as { role: string; content: string }[]).find((m) => m.role === "tool")!;
+    expect(whole.content).toContain("مؤسسة الرواد");
+  });
+
   it("a conversation that grew too long asks for a new one", async () => {
     const { token, companyId, userId } = await ownerSession();
     const long = [{ role: "user", content: "x".repeat(100_000) }];
@@ -353,7 +370,7 @@ describe("the assistant", () => {
 // The free providers behind it (OpenAI-compatible chat APIs), faked on a local port
 // ---------------------------------------------------------------------------
 
-type Behaviour = { status?: number; retryAfter?: string; chunks?: unknown[]; breakAfter?: number };
+type Behaviour = { status?: number; retryAfter?: string; chunks?: unknown[]; breakAfter?: number; failTimes?: number };
 
 describe("the model providers", () => {
   let fake: Server;
@@ -368,7 +385,7 @@ describe("the model providers", () => {
       const name = String(req.params.provider);
       seen.push({ provider: name, body: req.body, auth: req.get("authorization") });
       const b = behaviours[name] ?? {};
-      if (b.status) {
+      if (b.status && (b.failTimes === undefined || b.failTimes-- > 0)) {
         if (b.retryAfter) res.set("retry-after", b.retryAfter);
         res.status(b.status).json({ error: { message: "nope" } });
         return;
@@ -438,6 +455,16 @@ describe("the model providers", () => {
     await callModel(request, { onText: () => {}, onReset: () => {} });
     // The second time, the one out of quota isn't asked again.
     expect(seen.map((s) => s.provider)).toEqual(["one", "two", "two"]);
+  });
+
+  it("waits out a per-minute limit when no other provider can answer", async () => {
+    setProvidersForTests([provider("one")]);
+    behaviours.one = { status: 429, retryAfter: "1", failTimes: 1, chunks: answer(["تمام"]) };
+    const waits: number[] = [];
+    const result = await callModel(request, { onText: () => {}, onReset: () => {}, onWait: (s) => waits.push(s) });
+    expect(result.content).toBe("تمام");
+    expect(waits).toEqual([1]);
+    expect(seen.map((x) => x.provider)).toEqual(["one", "one"]);
   });
 
   it("an answer that breaks halfway is started again by the next provider", async () => {

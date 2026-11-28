@@ -464,18 +464,22 @@ function renderEndpoint(endpoint: Endpoint) {
 /** The sections' ids, for the docs tool. */
 export const SECTION_IDS = SECTIONS.map((section) => section.id);
 
-const endpointLine = (e: Endpoint) => `${e.method} ${e.path} — ${e.does}`;
+/** A section's paths, each once with its methods: "GET|PATCH|DELETE /api/customers/:id". */
+function pathLines(endpoints: Endpoint[]) {
+  const methods = new Map<string, string[]>();
+  for (const e of endpoints) methods.set(e.path, [...(methods.get(e.path) ?? []), e.method]);
+  return [...methods].map(([path, list]) => `${list.join("|")} ${path}`).join("\n");
+}
 
 let index: string | undefined;
 
 /**
- * What the model always sees (in the system prompt): every endpoint in one line, without
- * the bodies, so the prompt stays small enough for free plans' per-minute token limits.
+ * What the model always sees (in the system prompt): the sections and their paths only.
+ * What each does and its fields come from the docs tool. Free plans count every token
+ * of the prompt on every request, so this stays as short as it can.
  */
 export function apiIndex() {
-  index ??= SECTIONS.map(
-    (section) => `### ${section.id}: ${section.title}\n(${section.note})\n${section.endpoints.map(endpointLine).join("\n")}`,
-  ).join("\n\n");
+  index ??= SECTIONS.map((section) => `### ${section.id}: ${section.title}\n(${section.note})\n${pathLines(section.endpoints)}`).join("\n\n");
   return index;
 }
 

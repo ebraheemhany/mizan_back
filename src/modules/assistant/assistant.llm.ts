@@ -36,6 +36,8 @@ export type StreamHooks = {
   onText: (delta: string) => void;
   /** The text streamed so far is void: another provider starts this answer again. */
   onReset: () => void;
+  /** Every provider is out of its per-minute quota: the answer waits this many seconds. */
+  onWait?: (seconds: number) => void;
 };
 
 export type ModelCall = (request: ModelRequest, hooks: StreamHooks) => Promise<ModelReply>;
@@ -61,7 +63,9 @@ export function providers(): Provider[] {
     list.push({ name: "custom", baseUrl: config.LLM_BASE_URL, apiKey: config.LLM_API_KEY, model: config.LLM_MODEL });
   }
   if (config.GROQ_API_KEY) {
-    list.push({ name: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKey: config.GROQ_API_KEY, model: config.GROQ_MODEL });
+    for (const model of config.GROQ_MODEL) {
+      list.push({ name: `groq:${model}`, baseUrl: "https://api.groq.com/openai/v1", apiKey: config.GROQ_API_KEY, model });
+    }
   }
   return list;
 }
@@ -96,34 +100,38 @@ const coolingUntil = new Map<string, number>();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Short waits (a per-minute limit) are waited out; longer ones move on to the next provider. */
-const MAX_WAIT_SECONDS = 10;
+/**
+ * A provider out of its per-minute quota (free plans allow only a few requests a minute)
+ * is waited for, when no other provider can answer: up to this long, a few times a turn.
+ * Longer (a daily quota) and the answer gives up with "out of quota".
+ */
+const MAX_WAIT_SECONDS = 65;
 
 const realModelCall: ModelCall = async (request, hooks) => {
   const list = providers();
   const failures: ProviderError[] = [];
-  for (const provider of list) {
-    if ((coolingUntil.get(provider.name) ?? 0) > Date.now()) {
-      failures.push(new ProviderError(429, `${provider.name} is out of quota for now`, null));
-      continue;
-    }
-    for (let attempt = 0; attempt < 3; attempt++) {
+  for (let round = 0; round < 4; round++) {
+    for (const provider of list) {
+      if ((coolingUntil.get(provider.name) ?? 0) > Date.now()) continue;
       try {
         return await streamChat(provider, request, hooks);
       } catch (err) {
         const failure = err instanceof ProviderError ? err : new ProviderError(0, (err as Error).message, null);
         if (failure.streamed) hooks.onReset();
         logger.warn({ provider: provider.name, status: failure.status, err: failure.message }, "assistant model call failed");
-        if (failure.status === 429 && failure.retryAfter !== null && failure.retryAfter <= MAX_WAIT_SECONDS && attempt < 2) {
-          await sleep(failure.retryAfter * 1000 + 250);
-          continue;
-        }
         if (failure.status === 429) coolingUntil.set(provider.name, Date.now() + (failure.retryAfter ?? 60) * 1000);
         failures.push(failure);
-        break;
       }
     }
+    // Nobody answered: wait for the first provider whose per-minute quota comes back soon.
+    const now = Date.now();
+    const soonest = Math.min(...list.map((p) => coolingUntil.get(p.name) ?? 0).filter((at) => at > now));
+    if (!Number.isFinite(soonest) || soonest - Date.now() > MAX_WAIT_SECONDS * 1000) break;
+    const wait = Math.max(0, soonest - Date.now());
+    hooks.onWait?.(Math.ceil(wait / 1000));
+    await sleep(wait + 300);
   }
+  if (failures.length === 0) failures.push(new ProviderError(429, "every provider is out of quota for now", null));
   if (failures.length > 0 && failures.every((f) => f.status === 401 || f.status === 403)) {
     throw new ModelUnavailableError("auth", "The assistant's API keys were refused");
   }

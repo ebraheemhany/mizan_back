@@ -20,7 +20,7 @@ const TOOLS: ToolDef[] = [
     type: "function",
     function: {
       name: "mizan_docs",
-      description: "The query strings and bodies of API sections. Read them before calling a section's endpoints with a query or a body.",
+      description: "What each endpoint of API sections does, with its query and body fields. Read before using a section's endpoints with a query or a body.",
       parameters: {
         type: "object",
         properties: { sections: { type: "array", items: { type: "string", enum: SECTION_IDS }, description: "Section ids, e.g. [\"invoices\"]." } },
@@ -137,6 +137,8 @@ export type AssistantEvent =
   /** The text streamed since the last step is void (another model answers it again). */
   | { type: "retry" }
   | { type: "lookup"; path: string }
+  /** The free model's per-minute quota is used up: the answer goes on in this many seconds. */
+  | { type: "wait"; seconds: number }
   | { type: "confirm"; actions: Omit<PendingChange, "body">[] }
   | { type: "action"; id: string; title: string; outcome: ChangeOutcome["status"]; message?: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }
@@ -151,7 +153,22 @@ export type Emit = (event: AssistantEvent) => void;
 /** Requests to the model in one turn. The last one must answer. */
 const MAX_STEPS = 10;
 /** A read's result is cut past this: free plans count tokens per minute. */
-const MAX_RESULT_CHARS = 12_000;
+const MAX_RESULT_CHARS = 8_000;
+/** Results from before the user's last message are sent this short (the record keeps them whole). */
+const OLD_RESULT_CHARS = 600;
+
+/**
+ * What is sent of the conversation: earlier messages' tool results cut short, so each new
+ * message doesn't carry every list looked up before (free plans count every token).
+ */
+function forRequest(messages: ChatMessage[]): ChatMessage[] {
+  const lastUser = messages.findLastIndex((m) => m.role === "user");
+  return messages.map((m, i) =>
+    i < lastUser && m.role === "tool" && m.content.length > OLD_RESULT_CHARS
+      ? { ...m, content: `${m.content.slice(0, OLD_RESULT_CHARS)}… [an earlier result, shortened: look it up again if needed]` }
+      : m,
+  );
+}
 
 export type TurnSetup = {
   /** The fixed prompt and who is asking. */
@@ -271,8 +288,12 @@ export async function runTurn(start: ChatMessage[], setup: TurnSetup): Promise<T
   for (let step = 0; step < MAX_STEPS; step++) {
     setup.emit({ type: "step" });
     const reply: ModelReply = await callModel(
-      { messages: [system, ...messages], tools: TOOLS, toolChoice: step === MAX_STEPS - 1 ? "none" : "auto" },
-      { onText: (delta) => setup.emit({ type: "text", delta }), onReset: () => setup.emit({ type: "retry" }) },
+      { messages: [system, ...forRequest(messages)], tools: TOOLS, toolChoice: step === MAX_STEPS - 1 ? "none" : "auto" },
+      {
+        onText: (delta) => setup.emit({ type: "text", delta }),
+        onReset: () => setup.emit({ type: "retry" }),
+        onWait: (seconds) => setup.emit({ type: "wait", seconds }),
+      },
     );
     setup.emit({
       type: "usage",

@@ -55,9 +55,14 @@ const envSchema = z.object({
   LLM_BASE_URL: z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.url().optional()),
   LLM_API_KEY: optionalText,
   LLM_MODEL: optionalText,
-  // 2. Groq's free plan (console.groq.com → API keys).
+  // 2. Groq's free plan (console.groq.com → API keys). Its free limits are per model, so
+  // several models (comma-separated, best first) share the load: when one is out of its
+  // per-minute tokens the next answers instead of waiting.
   GROQ_API_KEY: optionalText,
-  GROQ_MODEL: z.string().trim().min(1).default("openai/gpt-oss-120b"),
+  GROQ_MODEL: z
+    .string()
+    .default("openai/gpt-oss-120b,qwen/qwen3.8-27b,openai/gpt-oss-20b")
+    .transform((value) => value.split(",").map((model) => model.trim()).filter(Boolean)),
   // Subscriptions through Paymob (Egypt). Without the keys, development uses a
   // local test checkout page instead; production refuses to take payments.
   PAYMOB_SECRET_KEY: z
