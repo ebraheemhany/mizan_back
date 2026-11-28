@@ -11,8 +11,8 @@ import { Prisma } from "../../generated/prisma/client.js";
  *                   A cheque goes into "cheques" until it clears.
  *   chequeCleared   the day a cheque cleared: Dr where it went in / Cr cheques
  *   chequeBounced   the day a cheque bounced: Dr customers / Cr cheques (owed again)
- *   expense         on its date: Dr its category / Cr where it was paid from,
- *                   or Cr suppliers when it was saved as due
+ *   expense         on its date: Dr its category (the cost, VAT excluded), Dr VAT input (its
+ *                   VAT, if any) / Cr where it was paid from, or Cr suppliers when saved as due
  *   expensePayment  a due expense paid later, on that day: Dr suppliers / Cr where it was paid from
  *   payroll         an approved (or paid) month's salaries, on its accrual day (the month's last
  *                   day, or the day it was paid if earlier): Dr salaries (the cost: pay after
@@ -104,10 +104,12 @@ export function autoLines(companyId: string) {
     SELECT 'expense', e."id", e."date", l."key", l."debit", l."credit", l."position"
     FROM "expenses" e
     CROSS JOIN LATERAL (VALUES
-      (e."category"::text, e."amount", 0::numeric, 0),
-      (CASE WHEN e."paidOn" = e."date" THEN ${paidFrom} ELSE 'suppliers' END, 0::numeric, e."amount", 1)
+      (e."category"::text, e."amount" - e."vat", 0::numeric, 0),
+      ('vatInput', e."vat", 0::numeric, 1),
+      (CASE WHEN e."paidOn" = e."date" THEN ${paidFrom} ELSE 'suppliers' END, 0::numeric, e."amount", 2)
     ) ${LINE}
-    WHERE e."companyId" = ${companyId}
+    -- No VAT: no VAT line.
+    WHERE e."companyId" = ${companyId} AND (l."debit" <> 0 OR l."credit" <> 0)
 
     UNION ALL
     SELECT 'expensePayment', e."id", e."paidOn", l."key", l."debit", l."credit", l."position"

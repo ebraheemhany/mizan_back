@@ -432,6 +432,8 @@ describe("GET /api/reports/vat", () => {
       due: "140.02",
       taxableSales: "1000.08",
       exemptSales: "500.00",
+      taxablePurchases: "0.00",
+      purchasesCount: 0,
       invoicesCount: 4,
       filingDueDate: monthEnd(1),
     });

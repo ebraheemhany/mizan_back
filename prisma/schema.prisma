@@ -97,6 +97,7 @@ model Company {
   payrollRuns       PayrollRun[]
   payrollItems      PayrollItem[]
   sentNotices       SentNotice[]
+  suppliers         Supplier[]
 
   @@map("companies")
 }
@@ -544,7 +545,13 @@ model Expense {
   receipt       StoredFile?     @relation(fields: [receiptFileId], references: [id], onDelete: SetNull)
   // When a due expense has to be paid.
   dueDate       DateTime?       @db.Date
+  // The supplier's name when it was saved (kept if the supplier is renamed or removed).
   vendor        String?
+  supplierId    String?
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  // The VAT in amount (amount is what was paid, VAT included): input VAT, taken off the
+  // VAT due. The cost is amount - vat. 0 when there is none.
+  vat           Decimal         @default(0) @db.Decimal(14, 2)
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
@@ -556,6 +563,7 @@ model Expense {
 
   @@index([companyId, date])
   @@index([companyId, status])
+  @@index([supplierId])
   @@map("expenses")
 }
 
@@ -1483,4 +1491,27 @@ model SentNotice {
 
   @@unique([companyId, key])
   @@map("sent_notices")
+}
+
+// ---------------------------------------------------------------------------
+// Suppliers (who the company buys from: its expenses and what it still owes them)
+// ---------------------------------------------------------------------------
+
+model Supplier {
+  id        String  @id @default(uuid())
+  name      String
+  phone     String?
+  email     String?
+  taxNumber String?
+  notes     String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  expenses  Expense[]
+
+  @@index([companyId, name])
+  @@map("suppliers")
 }

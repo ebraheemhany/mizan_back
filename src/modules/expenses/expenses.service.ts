@@ -8,6 +8,7 @@ import { prisma } from "../../lib/prisma.js";
 import { assertBooksOpen, checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { audit } from "../audit/audit.service.js";
 import { revenueByMonth } from "../reports/revenue.js";
+import { supplierFor } from "../suppliers/suppliers.service.js";
 import type { CreateExpenseInput, ListExpensesQuery } from "./expenses.schemas.js";
 
 type Actor = { id: string; companyId: string; role: Role };
@@ -26,6 +27,8 @@ const expenseSelect = {
   paidAt: true,
   dueDate: true,
   vendor: true,
+  vat: true,
+  supplier: { select: { id: true, name: true } },
   createdAt: true,
   createdById: true,
   receipt: { select: { contentType: true, size: true, name: true } },
@@ -45,6 +48,9 @@ function toDto(row: ExpenseRow) {
     paidAt: row.paidAt,
     dueDate: row.dueDate ? toIso(row.dueDate) : null,
     vendor: row.vendor,
+    // The supplier as it is now (null: none, or removed; vendor keeps the name it had).
+    supplier: row.supplier,
+    vat: moneyString(row.vat),
     createdAt: row.createdAt,
     // The attached receipt (GET /api/expenses/:id/receipt); null when there is none.
     receipt: row.receipt,
@@ -72,7 +78,7 @@ function buildWhere(companyId: string, query: Omit<ListExpensesQuery, "page" | "
   if (range) and.push({ date: { gte: toDate(range.start), lte: toDate(range.end) } });
   if (query.q) {
     const contains = { contains: query.q, mode: "insensitive" } as const;
-    and.push({ OR: [{ title: contains }, { vendor: contains }] });
+    and.push({ OR: [{ title: contains }, { vendor: contains }, { supplier: { name: contains } }] });
   }
   return { AND: and } satisfies Prisma.ExpenseWhereInput;
 }
@@ -111,7 +117,8 @@ export async function exportExpenses(companyId: string, query: ListExpensesQuery
  */
 export async function expensesByMonth(companyId: string, from: string) {
   const rows = await prisma.$queryRaw<{ month: string; total: Decimal }[]>`
-    SELECT to_char(date_trunc('month', "date"), 'YYYY-MM') AS month, SUM("amount") AS total
+    -- The cost: what was paid, less the VAT in it (that is claimed back, not spent).
+    SELECT to_char(date_trunc('month', "date"), 'YYYY-MM') AS month, SUM("amount" - "vat") AS total
     FROM "expenses"
     WHERE "companyId" = ${companyId}
       AND "date" >= ${toDate(from)}::date
@@ -134,12 +141,12 @@ export async function expenseStats(companyId: string) {
     prisma.expense.groupBy({
       by: ["category"],
       where: { companyId, date: { gte: toDate(month.start), lte: toDate(month.end) } },
-      _sum: { amount: true },
+      _sum: { amount: true, vat: true },
     }),
     prisma.expense.aggregate({ where: { companyId, status: "due" }, _sum: { amount: true }, _count: true }),
-    // Distinct vendors owed money (an expense with no vendor counts on its own).
+    // Distinct suppliers owed money (an expense with none counts on its own).
     prisma.$queryRaw<{ count: number }[]>`
-      SELECT COUNT(DISTINCT COALESCE("vendor", "id"))::int AS count
+      SELECT COUNT(DISTINCT COALESCE("supplierId", "vendor", "id"))::int AS count
       FROM "expenses" WHERE "companyId" = ${companyId} AND "status" = 'due'`,
     // Revenue of the month, the dashboard's definition (shared helper).
     revenueByMonth(companyId, month),
@@ -149,7 +156,7 @@ export async function expenseStats(companyId: string) {
   const total = byMonth.get(month.start.slice(0, 7)) ?? ZERO;
   const prevTotal = byMonth.get(prev.start.slice(0, 7)) ?? ZERO;
   const categories = byCategory
-    .map((c) => ({ category: c.category, amount: c._sum.amount ?? ZERO }))
+    .map((c) => ({ category: c.category, amount: (c._sum.amount ?? ZERO).minus(c._sum.vat ?? ZERO) }))
     // Largest first; equal amounts by category name, so the order never jumps around.
     .sort((a, b) => b.amount.comparedTo(a.amount) || a.category.localeCompare(b.category));
 
@@ -192,6 +199,8 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
   const row = await prisma.$transaction(async (tx) => {
     // It goes into the books on its date, which must be open.
     await assertBooksOpen(tx, actor.companyId, [input.date]);
+    // The supplier picked, or the one with the name typed (added to the list if new).
+    const supplier = await supplierFor(tx, actor.companyId, input);
     const created = await tx.expense.create({
       data: {
         title: input.title,
@@ -204,7 +213,9 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
         // Saved as paid: paid on its own date.
         paidOn: paid ? toDate(input.date) : null,
         dueDate: !paid && input.dueDate ? toDate(input.dueDate) : null,
-        vendor: input.vendor ?? null,
+        vendor: supplier?.name ?? null,
+        supplierId: supplier?.id ?? null,
+        vat: money(input.vat ?? "0"),
         companyId: actor.companyId,
         createdById: actor.id,
       },
@@ -214,7 +225,12 @@ export async function createExpense(actor: Actor, input: CreateExpenseInput) {
       action: "create",
       event: paid ? "expenseAdded" : "expenseAddedDue",
       item: { type: "expense", id: created.id, ref: created.title },
-      values: { amount: moneyString(created.amount), category: created.category, vendor: created.vendor ?? undefined },
+      values: {
+        amount: moneyString(created.amount),
+        category: created.category,
+        vendor: created.vendor ?? undefined,
+        ...(created.vat.gt(0) ? { vat: moneyString(created.vat) } : {}),
+      },
     });
     return created;
   });

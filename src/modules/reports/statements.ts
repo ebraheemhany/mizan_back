@@ -99,6 +99,8 @@ const SECTIONS: Section[] = ["operating", "investing", "financing"];
 function classify(a: ChartAccount): { section: Section; key: string } {
   if (a.key === "customers" || a.key === "cheques") return { section: "operating", key: "customers" };
   if (a.key === "suppliers" || a.key === "vat") return { section: "operating", key: a.key };
+  // VAT paid on purchases is part of settling VAT with the tax authority, like VAT on sales.
+  if (a.key === "vatInput") return { section: "operating", key: "vat" };
   // Paying salaries owed, or the insurance and tax withheld from them, is part of running the business.
   if (a.key === "salariesPayable" || a.key === "socialInsurance" || a.key === "payrollTax") return { section: "operating", key: "salaries" };
   if (a.key === "employeeAdvances") return { section: "operating", key: "employeeAdvances" };

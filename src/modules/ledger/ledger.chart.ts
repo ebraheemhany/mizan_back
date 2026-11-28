@@ -15,6 +15,8 @@ export const SYSTEM_ACCOUNTS = [
   { key: "customers", code: "1100", type: "asset" },
   // Salary advances, owed back by the employees (taken off their pay).
   { key: "employeeAdvances", code: "1160", type: "asset" },
+  // VAT paid on purchases (input VAT): taken off the VAT owed on sales when filing.
+  { key: "vatInput", code: "1170", type: "asset" },
   { key: "fixedAssets", code: "1500", type: "asset" },
   // Expenses saved as due, until they are paid.
   { key: "suppliers", code: "2100", type: "liability" },

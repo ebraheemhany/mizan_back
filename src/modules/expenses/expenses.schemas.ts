@@ -12,6 +12,12 @@ const amount = z.preprocess(
     .refine((v) => Number(v) > 0, "Must be more than 0"),
 );
 
+/** Like amount, but 0 is allowed (no VAT). */
+const vatAmount = z.preprocess(
+  (v) => (typeof v === "number" ? String(v) : typeof v === "string" ? v.trim().replace(/,/g, "") : v),
+  z.string().regex(/^\d{1,12}(\.\d{1,2})?$/, "Must be a number with up to 2 decimals"),
+);
+
 const optionalText = (max: number) =>
   z.preprocess(
     (v) => (typeof v === "string" ? (v.trim() === "" ? null : v.trim()) : v),
@@ -29,9 +35,17 @@ export const createExpenseSchema = z
     paidFrom: z.enum(expenseSources).nullable().optional(),
     /** When it has to be paid (due expenses). */
     dueDate: isoDate.nullable().optional(),
+    /** The supplier, from the list. */
+    supplierId: z.uuid().nullable().optional(),
+    /** Or a supplier's name: the one with that name, or a new one added to the list. */
     vendor: optionalText(120),
+    /** The VAT included in amount (input VAT); left out or 0: none. */
+    vat: vatAmount.optional(),
   })
   .superRefine((v, ctx) => {
+    if (v.vat !== undefined && Number(v.vat) >= Number(v.amount)) {
+      ctx.addIssue({ code: "custom", path: ["vat"], message: "The VAT must be less than the amount" });
+    }
     if (v.status === "due" && v.paidFrom) {
       ctx.addIssue({ code: "custom", path: ["paidFrom"], message: "A due expense isn't paid yet" });
     }

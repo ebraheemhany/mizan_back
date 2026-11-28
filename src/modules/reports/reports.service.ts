@@ -108,7 +108,7 @@ export async function summary(companyId: string, periodKey: string | undefined) 
     prisma.expense.groupBy({
       by: ["category"],
       where: { companyId, date: within(counted(period)) },
-      _sum: { amount: true },
+      _sum: { amount: true, vat: true },
     }),
     // Collected = cleared payments only (a pending cheque isn't money in yet).
     prisma.invoicePayment.aggregate({
@@ -120,7 +120,8 @@ export async function summary(companyId: string, periodKey: string | undefined) 
 
   // Approved payroll is a salaries cost, next to salaries entered as expenses.
   const expenseMonths = withPayroll(expenseOnlyMonths, payrollMonths);
-  const spent = new Map(byCategory.map((c) => [c.category, c._sum.amount ?? ZERO]));
+  // The cost of each category: what was paid less the VAT in it (claimed back, not spent).
+  const spent = new Map(byCategory.map((c) => [c.category, (c._sum.amount ?? ZERO).minus(c._sum.vat ?? ZERO)]));
   spent.set("salaries", (spent.get("salaries") ?? ZERO).plus(sumMonths(payrollMonths, counted(period))));
   const spentOn = (category: ExpenseCategory) => spent.get(category) ?? ZERO;
 
@@ -257,18 +258,24 @@ export async function vatReport(companyId: string, periodKey: string | undefined
     issueDate: within(counted(period)),
   } satisfies Prisma.InvoiceWhereInput;
 
-  const [taxable, exempt, used, company] = await prisma.$transaction([
+  const [taxable, exempt, used, company, purchases] = await prisma.$transaction([
     prisma.invoice.aggregate({ where: { ...issued, vatRate: { gt: 0 } }, _sum: { subtotal: true, vat: true }, _count: true }),
     // VAT off in the settings when the invoice was written (vatRate 0).
     prisma.invoice.aggregate({ where: { ...issued, vatRate: 0 }, _sum: { subtotal: true, vat: true }, _count: true }),
     // The rates the period's invoices were taxed at (more than one if it changed meanwhile).
     prisma.invoice.groupBy({ by: ["vatRate"], where: { ...issued, vatRate: { gt: 0 } }, orderBy: { vatRate: "asc" } }),
     prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { vatRate: true } }),
+    // Input VAT: the VAT in the period's expenses (purchases with VAT on them).
+    prisma.expense.aggregate({
+      where: { companyId, date: within(counted(period)), vat: { gt: 0 } },
+      _sum: { amount: true, vat: true },
+      _count: true,
+    }),
   ]);
   const rates = used.map((r) => Number(r.vatRate));
 
   const output = (taxable._sum.vat ?? ZERO).plus(exempt._sum.vat ?? ZERO);
-  const input = ZERO; // Expenses carry no VAT yet.
+  const input = purchases._sum.vat ?? ZERO;
 
   return {
     period: periodDto(period),
@@ -281,6 +288,9 @@ export async function vatReport(companyId: string, periodKey: string | undefined
     due: moneyString(output.minus(input)),
     taxableSales: moneyString(taxable._sum.subtotal ?? ZERO),
     exemptSales: moneyString(exempt._sum.subtotal ?? ZERO),
+    // Purchases with VAT on them (the cost, VAT excluded), and how many.
+    taxablePurchases: moneyString((purchases._sum.amount ?? ZERO).minus(input)),
+    purchasesCount: purchases._count,
     invoicesCount: taxable._count + exempt._count,
     // The return is due by the end of the month after the period.
     filingDueDate: monthRange(period.end, 1).end,
