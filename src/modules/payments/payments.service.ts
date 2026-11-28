@@ -7,6 +7,7 @@ import { prisma } from "../../lib/prisma.js";
 import { applyPayment, overdueWhere, paymentNumber } from "../invoices/invoices.service.js";
 import { checkBooksOpen, lockBooks } from "../ledger/ledger.periods.js";
 import { audit } from "../audit/audit.service.js";
+import { notifyPayment } from "../notifications/notices.service.js";
 import type { CreatePaymentInput, ListPaymentsQuery } from "./payments.schemas.js";
 
 type Actor = { id: string; companyId: string };
@@ -240,6 +241,7 @@ export async function openInvoices(companyId: string) {
 export async function createPayment(actor: Actor, input: CreatePaymentInput) {
   const { invoiceId, ...payment } = input;
   const id = await applyPayment(actor, { id: invoiceId }, payment);
+  await notifyPayment(actor.companyId, id, actor.id);
   return getPayment(actor.companyId, id);
 }
 

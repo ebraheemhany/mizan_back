@@ -3,6 +3,7 @@ import { createApp } from "./app.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
 import { startBillingJob } from "./modules/billing/billing.job.js";
+import { startNoticesJob } from "./modules/notifications/notices.job.js";
 import { startRecurringJob } from "./modules/recurring/recurring.job.js";
 
 const server = createApp().listen(config.PORT, () => {
@@ -13,11 +14,14 @@ const server = createApp().listen(config.PORT, () => {
 const stopRecurringJob = startRecurringJob();
 // Renews subscriptions (hourly).
 const stopBillingJob = startBillingJob();
+// Payment reminders to customers, the team's alerts and the weekly digest (hourly).
+const stopNoticesJob = startNoticesJob();
 
 function shutdown(signal: string) {
   logger.info(`${signal} received, shutting down`);
   stopRecurringJob();
   stopBillingJob();
+  stopNoticesJob();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

@@ -64,7 +64,8 @@ function toDto(row: SettingsRow) {
 
 export type SettingsDto = ReturnType<typeof toDto>;
 
-const notificationsDefaults = notificationsSection.parse({
+export const notificationsDefaults = notificationsSection.parse({
+  customerReminders: false,
   overdueInvoice: true,
   newPayment: true,
   taskReminder: true,
@@ -76,6 +77,11 @@ const integrationsDefaults = integrationsSection.parse({
   eta: false,
   calendar: false,
 });
+
+/** A company's notification switches as stored, with the defaults for any it never set. */
+export function notificationsOf(stored: unknown) {
+  return { ...notificationsDefaults, customerReminders: false, ...(stored as object) } as Required<typeof notificationsDefaults>;
+}
 
 export async function getSettings(companyId: string) {
   const row = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: settingsSelect });
@@ -132,7 +138,11 @@ export async function updateSettings(companyId: string, input: UpdateSettingsInp
     data.invoiceTemplate = input.template.style;
     data.invoiceFooter = input.template.footer;
   }
-  if (input.notifications) data.notifications = input.notifications;
+  // Merged: a switch the screen didn't send (an older one) keeps its value.
+  if (input.notifications) {
+    const current = await prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: { notifications: true } });
+    data.notifications = { ...notificationsOf(current.notifications), ...input.notifications };
+  }
   if (input.integrations) data.integrations = input.integrations;
 
   const row = await prisma.$transaction(async (tx) => {

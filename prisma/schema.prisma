@@ -96,6 +96,7 @@ model Company {
   employeeDocuments EmployeeDocument[]
   payrollRuns       PayrollRun[]
   payrollItems      PayrollItem[]
+  sentNotices       SentNotice[]
 
   @@map("companies")
 }
@@ -1463,4 +1464,23 @@ model PayrollItem {
   @@unique([runId, employeeId])
   @@index([companyId, employeeId])
   @@map("payroll_items")
+}
+
+// ---------------------------------------------------------------------------
+// Automatic emails (payment reminders to customers, alerts and digests to the team)
+// ---------------------------------------------------------------------------
+
+// One automatic email, claimed before it goes: its key ("overdue:2026-11-28",
+// "reminder:<invoiceId>:overdue:2", "digest:2026-11-28"...) is unique per company, so
+// a run, a restart or a second server never sends it twice.
+model SentNotice {
+  id        String   @id @default(uuid())
+  key       String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, key])
+  @@map("sent_notices")
 }

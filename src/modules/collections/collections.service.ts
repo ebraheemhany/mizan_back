@@ -11,6 +11,7 @@ import { open, seal } from "../../lib/secret-box.js";
 import { audit } from "../audit/audit.service.js";
 import { createAccountCheckout, readTransaction, verifyCallback, type CallbackType } from "../billing/paymob.js";
 import type { Locale } from "../email/templates.js";
+import { notifyPayment } from "../notifications/notices.service.js";
 import { checkUpload } from "../files/files.service.js";
 import { applyPaymentTx, paymentNumber } from "../invoices/invoices.service.js";
 import type { ClaimInput, PaymobAccountInput, TransferDetailsInput } from "./collections.schemas.js";
@@ -356,12 +357,12 @@ export async function handlePaymobCallback(companyId: string, body: unknown, hma
   }
 
   try {
-    await prisma.$transaction(async (db) => {
+    const recorded = await prisma.$transaction(async (db) => {
       const { count } = await db.onlinePayment.updateMany({
         where: { id: online.id, status: "pending" },
         data: { status: "paid", transactionId: tx.transactionId ?? null, settledAt: new Date() },
       });
-      if (count === 0) return;
+      if (count === 0) return null;
       const paymentId = await applyPaymentTx(db, { id: null, companyId }, { id: online.invoiceId }, {
         amount: online.amount.toFixed(2),
         date: businessToday(),
@@ -371,7 +372,10 @@ export async function handlePaymobCallback(companyId: string, body: unknown, hma
         note: "Paymob",
       });
       await db.onlinePayment.update({ where: { id: online.id }, data: { paymentId } });
+      return paymentId;
     });
+    // The customer paid: the team hears (nobody recorded it, so everyone does).
+    if (recorded) await notifyPayment(companyId, recorded, null);
   } catch (err) {
     // Paid, but it can't be recorded (the invoice was paid another way meanwhile, or
     // its month is closed): kept as paid with the reason, for someone to sort out.
@@ -459,7 +463,7 @@ const DEFAULT_ACCOUNT: Partial<Record<PaymentMethod, "bank" | "wallet">> = { ban
 export async function acceptClaim(actor: Actor, id: string, input: { account?: "bank" | "cashbox" | "wallet" | undefined }) {
   const claim = await findClaim(prisma, actor.companyId, id);
   if (claim.status !== "pending") throw alreadyReviewed();
-  await prisma.$transaction(async (tx) => {
+  const paymentId = await prisma.$transaction(async (tx) => {
     const paymentId = await applyPaymentTx(tx, actor, { id: claim.invoiceId }, {
       amount: claim.amount.toFixed(2),
       date: toIso(claim.date),
@@ -481,7 +485,9 @@ export async function acceptClaim(actor: Actor, id: string, input: { account?: "
       item: { type: "invoice", id: claim.invoice.id, ref: `${claim.invoice.numberPrefix}${claim.invoice.number}` },
       values: { amount: moneyString(claim.amount), method: claim.method, customer: claim.invoice.customerName },
     });
+    return paymentId;
   });
+  await notifyPayment(actor.companyId, paymentId, actor.id);
   return claimDto(await findClaim(prisma, actor.companyId, id));
 }
 

@@ -207,6 +207,64 @@ const TEXT = {
       net: "صافي المرتب",
       paidOn: "تاريخ الصرف",
     },
+    notices: {
+      footer: (setting: string) =>
+        `بيوصلك الإيميل ده من ميزان علشان «${setting}» شغّال في الإعدادات ← الإشعارات، وتقدر تقفله من هناك.`,
+      invoices: (n: number) => (n === 1 ? "فاتورة واحدة" : n === 2 ? "فاتورتين" : n <= 10 ? `${n} فواتير` : `${n} فاتورة`),
+      tasks: (n: number) => (n === 1 ? "مهمة واحدة" : n === 2 ? "مهمتين" : n <= 10 ? `${n} مهام` : `${n} مهمة`),
+      overdue: {
+        setting: "فاتورة متأخرة",
+        subject: (invoices: string, company: string) => `${invoices} متأخرة في ${company}`,
+        heading: "فواتير عدّى ميعاد استحقاقها",
+        // No full stop after the amount: "ج.م." already ends with one.
+        body: (invoices: string, total: string) => `عندك ${invoices} عدّى ميعاد استحقاقها، والمتبقي عليها ${total}`,
+        late: (remaining: string, days: number) => `${remaining} · متأخرة ${days} يوم`,
+        more: (invoices: string) => `ومعاهم ${invoices} كمان في صفحة الفواتير.`,
+        button: "عرض الفواتير",
+      },
+      payment: {
+        setting: "دفعة جديدة",
+        subject: (amount: string, customer: string) => `دفعة جديدة ${amount} من ${customer}`,
+        heading: "اتسجلت دفعة جديدة",
+        byUser: (name: string) => `${name} سجّل دفعة على فاتورة.`,
+        byCustomer: "عميل دفع فاتورة أونلاين.",
+        invoice: "الفاتورة",
+        customer: "العميل",
+        amount: "المبلغ",
+        method: "طريقة الدفع",
+        date: "التاريخ",
+        methods: {
+          cash: "كاش",
+          bank: "تحويل بنكي",
+          card: "كارت",
+          instapay: "إنستاباي",
+          vodafoneCash: "فودافون كاش",
+          cheque: "شيك",
+        } as Record<string, string>,
+        button: "عرض الفاتورة",
+      },
+      taskList: {
+        setting: "تذكير المهام",
+        subject: (tasks: string) => `عندك ${tasks} النهارده`,
+        heading: "مهام النهارده",
+        body: (name: string) => `صباح الخير ${name}، دي المهام اللي ميعادها النهارده:`,
+        priorities: { urgent: "عاجلة", important: "مهمة", normal: "عادية" } as Record<string, string>,
+        button: "فتح المهام",
+      },
+      digest: {
+        setting: "ملخص أسبوعي",
+        subject: (company: string) => `ملخص الأسبوع في ${company}`,
+        heading: "ملخص الأسبوع",
+        body: (from: string, to: string) => `ده ملخص شغلك من ${from} لحد ${to}، ووضع الفلوس النهارده.`,
+        invoiced: (invoices: string) => `فواتير صدرت (${invoices})`,
+        collected: "اتحصّل",
+        expenses: "مصروفات",
+        outstanding: "مستحق عند العملاء دلوقتي",
+        overdue: (invoices: string) => `منه متأخر (${invoices})`,
+        dueSoon: "مستحق خلال الأسبوع الجاي",
+        button: "فتح لوحة التحكم",
+      },
+    },
   },
   en: {
     brand: "Mizan",
@@ -283,6 +341,63 @@ const TEXT = {
       advance: "Advance installment",
       net: "Net pay",
       paidOn: "Paid on",
+    },
+    notices: {
+      footer: (setting: string) =>
+        `Mizan sends you this email because "${setting}" is on in Settings → Notifications; you can turn it off there.`,
+      invoices: (n: number) => (n === 1 ? "1 invoice" : `${n} invoices`),
+      tasks: (n: number) => (n === 1 ? "1 task" : `${n} tasks`),
+      overdue: {
+        setting: "Overdue invoice",
+        subject: (invoices: string, company: string) => `${invoices} overdue at ${company}`,
+        heading: "Invoices past their due date",
+        body: (invoices: string, total: string) => `You have ${invoices} past the due date, with ${total} still owed.`,
+        late: (remaining: string, days: number) => `${remaining} · ${days} days late`,
+        more: (invoices: string) => `And ${invoices} more on the invoices page.`,
+        button: "View invoices",
+      },
+      payment: {
+        setting: "New payment",
+        subject: (amount: string, customer: string) => `New payment of ${amount} from ${customer}`,
+        heading: "A new payment was recorded",
+        byUser: (name: string) => `${name} recorded a payment on an invoice.`,
+        byCustomer: "A customer paid an invoice online.",
+        invoice: "Invoice",
+        customer: "Customer",
+        amount: "Amount",
+        method: "Method",
+        date: "Date",
+        methods: {
+          cash: "Cash",
+          bank: "Bank transfer",
+          card: "Card",
+          instapay: "InstaPay",
+          vodafoneCash: "Vodafone Cash",
+          cheque: "Cheque",
+        } as Record<string, string>,
+        button: "View the invoice",
+      },
+      taskList: {
+        setting: "Task reminder",
+        subject: (tasks: string) => `You have ${tasks} due today`,
+        heading: "Today's tasks",
+        body: (name: string) => `Good morning ${name}, these tasks are due today:`,
+        priorities: { urgent: "Urgent", important: "Important", normal: "Normal" } as Record<string, string>,
+        button: "Open tasks",
+      },
+      digest: {
+        setting: "Weekly digest",
+        subject: (company: string) => `Your week at ${company}`,
+        heading: "Your week",
+        body: (from: string, to: string) => `Here is your week from ${from} to ${to}, and where the money stands today.`,
+        invoiced: (invoices: string) => `Invoiced (${invoices})`,
+        collected: "Collected",
+        expenses: "Expenses",
+        outstanding: "Owed by customers now",
+        overdue: (invoices: string) => `Of which overdue (${invoices})`,
+        dueSoon: "Due in the coming week",
+        button: "Open the dashboard",
+      },
     },
   },
 };
@@ -533,6 +648,155 @@ export function payslipEmail(locale: Locale, to: string, from: Sender, slip: Pay
       paragraphs: message?.trim() ? [t.hello(i.name), message] : [t.hello(i.name), body],
       facts,
       footer: t.footerCompany(from.company),
+    }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Notices to the team (from Mizan, each one a switch in Settings → Notifications)
+// ---------------------------------------------------------------------------
+
+type Person = { email: string; name: string };
+
+/** The daily list of overdue invoices (the oldest first; the rest counted). */
+export function overdueAlertEmail(
+  locale: Locale,
+  to: Person,
+  company: string,
+  o: {
+    count: number;
+    total: string;
+    currency: string;
+    items: { number: string; customer: string; remaining: string; daysLate: number }[];
+    url: string;
+  },
+): Mail {
+  const t = TEXT[locale];
+  const n = t.notices.overdue;
+  const body = n.body(t.notices.invoices(o.count), formatMoney(locale, o.total, o.currency));
+  const extra = o.count - o.items.length;
+  return {
+    to: to.email,
+    subject: n.subject(t.notices.invoices(o.count), company),
+    tag: "notice-overdue",
+    ...render({
+      locale,
+      preview: body,
+      senderName: t.brand,
+      heading: n.heading,
+      paragraphs: [t.hello(to.name), body],
+      facts: o.items.map((i) => [`${i.number} · ${i.customer}`, n.late(formatMoney(locale, i.remaining, o.currency), i.daysLate)]),
+      button: { label: n.button, url: o.url },
+      ...(extra > 0 ? { notes: [n.more(t.notices.invoices(extra))] } : {}),
+      footer: t.notices.footer(n.setting),
+    }),
+  };
+}
+
+/** A payment recorded by someone else on the team, or paid online by a customer. */
+export function paymentNoticeEmail(
+  locale: Locale,
+  to: Person,
+  p: { invoice: string; customer: string; amount: string; currency: string; method: string; date: string; by: string | null; url: string },
+): Mail {
+  const t = TEXT[locale];
+  const n = t.notices.payment;
+  const amount = formatMoney(locale, p.amount, p.currency);
+  const body = p.by ? n.byUser(p.by) : n.byCustomer;
+  return {
+    to: to.email,
+    subject: n.subject(amount, p.customer),
+    tag: "notice-payment",
+    ...render({
+      locale,
+      preview: body,
+      senderName: t.brand,
+      heading: n.heading,
+      paragraphs: [t.hello(to.name), body],
+      facts: [
+        [n.invoice, p.invoice],
+        [n.customer, p.customer],
+        [n.amount, amount],
+        [n.method, n.methods[p.method] ?? p.method],
+        [n.date, formatDate(locale, p.date)],
+      ],
+      button: { label: n.button, url: p.url },
+      footer: t.notices.footer(n.setting),
+    }),
+  };
+}
+
+/** The morning list of someone's tasks due today. */
+export function tasksDueEmail(
+  locale: Locale,
+  to: Person,
+  tasks: { title: string; priority: string; customer: string | null }[],
+  url: string,
+): Mail {
+  const t = TEXT[locale];
+  const n = t.notices.taskList;
+  const count = t.notices.tasks(tasks.length);
+  return {
+    to: to.email,
+    subject: n.subject(count),
+    tag: "notice-tasks",
+    ...render({
+      locale,
+      preview: tasks.map((task) => task.title).join(" · ").slice(0, 140),
+      senderName: t.brand,
+      heading: n.heading,
+      paragraphs: [n.body(to.name)],
+      facts: tasks.map((task) => [task.customer ? `${task.title} · ${task.customer}` : task.title, n.priorities[task.priority] ?? task.priority]),
+      button: { label: n.button, url },
+      footer: t.notices.footer(n.setting),
+    }),
+  };
+}
+
+/** Saturday's digest: the past week, and what customers owe today. */
+export function weeklyDigestEmail(
+  locale: Locale,
+  to: Person,
+  company: string,
+  d: {
+    from: string;
+    to: string;
+    currency: string;
+    invoiced: string;
+    invoicedCount: number;
+    collected: string;
+    expenses: string;
+    outstanding: string;
+    overdue: string;
+    overdueCount: number;
+    dueSoon: string;
+    url: string;
+  },
+): Mail {
+  const t = TEXT[locale];
+  const n = t.notices.digest;
+  const money = (v: string) => formatMoney(locale, v, d.currency);
+  const body = n.body(formatDate(locale, d.from), formatDate(locale, d.to));
+  return {
+    to: to.email,
+    subject: n.subject(company),
+    tag: "notice-digest",
+    ...render({
+      locale,
+      preview: body,
+      senderName: t.brand,
+      heading: n.heading,
+      paragraphs: [t.hello(to.name), body],
+      facts: [
+        [n.invoiced(t.notices.invoices(d.invoicedCount)), money(d.invoiced)],
+        [n.collected, money(d.collected)],
+        [n.expenses, money(d.expenses)],
+        [n.outstanding, money(d.outstanding)],
+        [n.overdue(t.notices.invoices(d.overdueCount)), money(d.overdue)],
+        [n.dueSoon, money(d.dueSoon)],
+      ],
+      button: { label: n.button, url: d.url },
+      footer: t.notices.footer(n.setting),
     }),
   };
 }

@@ -50,6 +50,9 @@ const templateSection = z.strictObject({
 });
 
 export const notificationsSection = z.strictObject({
+  // Payment reminders emailed to customers on a schedule (off until the company turns them on).
+  // Optional: a screen from before it existed leaves it as it is.
+  customerReminders: z.boolean().optional(),
   overdueInvoice: z.boolean(),
   newPayment: z.boolean(),
   taskReminder: z.boolean(),

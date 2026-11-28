@@ -12,6 +12,7 @@ import {
 } from "./invoices.schemas.js";
 import * as invoices from "./invoices.service.js";
 import { publicPaymentOptions } from "../collections/collections.service.js";
+import { notifyPayment } from "../notifications/notices.service.js";
 
 export function createInvoicesRouter(limit: AuthRateLimiters) {
   const router = Router();
@@ -61,6 +62,7 @@ export function createInvoicesRouter(limit: AuthRateLimiters) {
     const ref = invoices.parseInvoiceRef(req.params.ref);
     // The new payment's id too, so its proof can be uploaded right after.
     const paymentId = await invoices.applyPayment(req.user!, ref, req.body);
+    await notifyPayment(req.user!.companyId, paymentId, req.user!.id);
     res.status(201).json({ invoice: await invoices.getInvoice(req.user!.companyId, ref), paymentId });
   });
 

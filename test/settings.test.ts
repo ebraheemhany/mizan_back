@@ -21,7 +21,7 @@ const fullSettings = {
 
 /** What comes back: the same, plus the logo (uploaded separately; none here). */
 // The rate isn't in fullSettings: left out, it stays at 14.
-const savedSettings = { ...fullSettings, company: { ...fullSettings.company, logoId: null }, taxes: { ...fullSettings.taxes, vatRate: "14.00" } };
+const savedSettings = { ...fullSettings, company: { ...fullSettings.company, logoId: null }, taxes: { ...fullSettings.taxes, vatRate: "14.00" }, notifications: { customerReminders: false, ...fullSettings.notifications } };
 
 const get = (token: string) => api().get("/api/settings").set(auth(token));
 const patch = (token: string, body: unknown) => api().patch("/api/settings").set(auth(token)).send(body);
@@ -36,7 +36,7 @@ describe("GET /api/settings", () => {
       taxes: { vatEnabled: true, vatRate: "14.00", withholdingEnabled: false, currency: "EGP", fiscalStartMonth: 1 },
       numbering: { invoicePrefix: "INV-", invoiceNext: 1, quotePrefix: "Q-", quoteNext: 1, paymentTermsDays: 30 },
       template: { style: "classic", footer: null },
-      notifications: { overdueInvoice: true, newPayment: true, taskReminder: true, weeklyDigest: false },
+      notifications: { customerReminders: false, overdueInvoice: true, newPayment: true, taskReminder: true, weeklyDigest: false },
       integrations: { whatsapp: false, paymentGateway: false, eta: false, calendar: false },
     });
   });

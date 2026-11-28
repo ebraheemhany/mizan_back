@@ -895,4 +895,39 @@ export async function recordReminder(actor: Actor, ref: InvoiceRef, input: Remin
   return getInvoice(actor.companyId, ref);
 }
 
+/**
+ * An automatic payment reminder (the company turned them on): the same email as a plain
+ * manual one, in the history and the log as sent by the system. False when there's no
+ * one to send it to or nothing left to remind about.
+ */
+export async function sendAutoReminder(
+  companyId: string,
+  invoiceId: string,
+  from: { company: string; replyTo: string },
+  locale: Locale = "ar",
+) {
+  const row = await prisma.invoice.findFirst({ where: { id: invoiceId, companyId }, select: mailSelect });
+  const to = row?.customer.email ?? row?.customerEmail;
+  if (!row || !to || !row.publicToken || !OPEN.includes(row.status) || remainingOf(row).lte(0)) return false;
+
+  await sendMail(reminderEmail(locale, to, from, mailFacts(row, locale)));
+  await prisma.$transaction(async (tx) => {
+    await tx.invoiceEvent.create({
+      data: { invoiceId: row.id, type: "reminderSent", values: { channel: "email", to, auto: true }, userId: null },
+    });
+    await audit(
+      tx,
+      companyId,
+      {
+        action: "send",
+        event: "reminderSent",
+        item: { type: "invoice", id: row.id, ref: `${row.numberPrefix}${row.number}` },
+        values: { number: row.number, channel: "email", customer: row.customerName, to, auto: true },
+      },
+      { id: null, name: null },
+    );
+  });
+  return true;
+}
+
 export { Decimal };
