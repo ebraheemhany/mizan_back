@@ -37,6 +37,9 @@ const messageSchema = z.object({
 
 const decisionSchema = z.object({ approve: z.boolean() });
 
+/** About 70K tokens of conversation (Claude's prompt stays well under its 100K price step). */
+export const MAX_CONVERSATION_CHARS = 250_000;
+
 const requireEnabled: RequestHandler = (_req, _res, next) => {
   if (!assistantEnabled()) throw new AppError(503, "ASSISTANT_OFF", "The assistant isn't set up on this server");
   next();
@@ -70,6 +73,11 @@ function openStream(res: Response) {
 
 function errorEvent(err: unknown) {
   if (err instanceof AppError) return { type: "error", code: err.code, message: err.message };
+  // Mizan's own Anthropic account: the prepaid credit ran out, or the key is wrong or revoked.
+  // Only the assistant stops; the rest of the app is unaffected.
+  if (err instanceof Anthropic.APIError && (err.status === 402 || err.status === 401 || err.status === 403)) {
+    return { type: "error", code: "ASSISTANT_SUSPENDED", message: "The assistant is paused for now" };
+  }
   if (err instanceof Anthropic.RateLimitError || err instanceof Anthropic.InternalServerError || err instanceof Anthropic.APIConnectionError) {
     return { type: "error", code: "ASSISTANT_UNAVAILABLE", message: "The assistant is busy right now, try again in a moment" };
   }
@@ -109,8 +117,14 @@ async function streamTurn(
       save: (next, pending) => saveConversation(conversation.id, next, pending),
     });
   } catch (err) {
-    req.log.error({ err }, "assistant turn failed");
-    stream.send(errorEvent(err));
+    const event = errorEvent(err);
+    req.log.error(
+      { err },
+      event.code === "ASSISTANT_SUSPENDED"
+        ? "assistant turn failed: Anthropic refused the account (top up the credit or check ANTHROPIC_API_KEY)"
+        : "assistant turn failed",
+    );
+    stream.send(event);
   } finally {
     await unlockConversation(conversation.id).catch(() => undefined);
     stream.send({ type: "done", usage: await usage(actor.companyId).catch(() => null) });
@@ -163,6 +177,11 @@ export function createAssistantRouter() {
   router.post("/conversations/:id/messages", requireEnabled, validateBody(messageSchema), async (req, res) => {
     const { text, page } = req.body as z.infer<typeof messageSchema>;
     const conversation = await getConversation(req.user!, id(req));
+    // A very long conversation costs more on every message (and past ~100K tokens, at a
+    // higher rate): the user starts a new one instead.
+    if (JSON.stringify(conversation.messages).length > MAX_CONVERSATION_CHARS) {
+      throw new AppError(409, "ASSISTANT_CONVERSATION_FULL", "This conversation is too long: start a new one");
+    }
     await lockConversation(conversation.id);
     try {
       await countMessage(req.user!.companyId);

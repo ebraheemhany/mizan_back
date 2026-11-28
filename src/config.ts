@@ -50,9 +50,10 @@ const envSchema = z.object({
   MAIL_OUTBOX_DIR: z.string().default(".mail-outbox"),
   // The in-app assistant (Claude). Without a key the assistant is off (the app hides it).
   ANTHROPIC_API_KEY: optionalText,
-  // Which Claude model answers, and how hard it thinks (low = cheaper and faster).
-  ASSISTANT_MODEL: z.string().trim().min(1).default("claude-opus-5-5"),
-  ASSISTANT_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
+  // Which Claude model answers, and how hard it thinks (low = cheaper and faster). Haiku is
+  // the low-cost one (prepaid credit, no subscription); high effort keeps it following the rules.
+  ASSISTANT_MODEL: z.string().trim().min(1).default("claude-haiku-5-5"),
+  ASSISTANT_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
   // Subscriptions through Paymob (Egypt). Without the keys, development uses a
   // local test checkout page instead; production refuses to take payments.
   PAYMOB_SECRET_KEY: z

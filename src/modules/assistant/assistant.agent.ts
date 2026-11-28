@@ -170,7 +170,7 @@ export type Emit = (event: AssistantEvent) => void;
 /** Requests to Claude in one turn (each read is one). The last one must answer. */
 const MAX_STEPS = 12;
 /** A read's result is cut past this, so one big list can't flood the conversation. */
-const MAX_RESULT_CHARS = 40_000;
+const MAX_RESULT_CHARS = 30_000;
 
 export type TurnSetup = {
   /** The fixed prompt (cached for everyone) and who is asking (per user). */
@@ -182,6 +182,13 @@ export type TurnSetup = {
 };
 
 export type TurnResult = { messages: BetaMessageParam[]; pending: Pending | null };
+
+/**
+ * Models that can hand a request they decline for policy reasons to a fallback model on
+ * the server. Haiku can't (a list of fallbacks there is a 400): it just reports the refusal.
+ */
+const hasServerFallback = (model: string) =>
+  model.startsWith("claude-opus-5") || model.startsWith("claude-fable-5") || model === "claude-sonnet-5-5";
 
 function requestParams(messages: BetaMessageParam[], system: TurnSetup["system"], lastStep: boolean): BetaMessageStreamParams {
   const fixed: BetaTextBlockParam = { type: "text", text: system.fixed, cache_control: { type: "ephemeral" } };
@@ -197,8 +204,9 @@ function requestParams(messages: BetaMessageParam[], system: TurnSetup["system"]
     cache_control: { type: "ephemeral" },
     output_config: { effort: config.ASSISTANT_EFFORT },
     // If the model declines for policy reasons, the API retries on its default fallback model.
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+    ...(hasServerFallback(config.ASSISTANT_MODEL)
+      ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
+      : {}),
   };
 }
 

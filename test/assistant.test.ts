@@ -1,5 +1,6 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import Anthropic from "@anthropic-ai/sdk";
 import type { BetaMessage, BetaMessageStreamParams } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setSelfUrlForTests } from "../src/modules/assistant/assistant.api.js";
@@ -185,6 +186,10 @@ describe("the assistant", () => {
     expect(system[1]!.text).toContain("شركة ميزان");
     expect(system[1]!.text).toContain(businessToday());
     expect(first!.tools!.map((t: any) => t.name)).toEqual(["mizan_get", "mizan_change"]);
+    // Haiku by default, thinking hard; it has no server-side fallback, so none is asked for.
+    expect(first).toMatchObject({ model: "claude-haiku-5-5", output_config: { effort: "high" } });
+    expect(first!.fallbacks).toBeUndefined();
+    expect(first!.betas).toBeUndefined();
 
     // Tokens are counted for the company.
     const usage = await prisma.assistantUsage.findFirstOrThrow();
@@ -336,5 +341,28 @@ describe("the assistant", () => {
     });
     const next = events(await ask(token, { text: "مرحبا تاني" }, id));
     expect(next.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("when Mizan's Anthropic credit runs out, only the assistant pauses (and says so)", async () => {
+    const { token } = await ownerSession();
+    setModelForTests(async () => {
+      throw new Anthropic.APIError(402, { type: "error", error: { type: "billing_error", message: "credit balance too low" } }, "credit balance too low", new Headers());
+    });
+    const stream = events(await ask(token, { text: "مرحبا" }));
+    expect(stream).toContainEqual(expect.objectContaining({ type: "error", code: "ASSISTANT_SUSPENDED" }));
+    // Not retried: it won't get better on its own.
+    expect(stream.some((e) => e.type === "retry")).toBe(false);
+    expect((await api().get("/api/customers").set(auth(token))).status).toBe(200);
+  });
+
+  it("a conversation that grew too long asks for a new one", async () => {
+    const { token, companyId, userId } = await ownerSession();
+    const long = [{ role: "user", content: [{ type: "text", text: "x".repeat(260_000) }] }];
+    const row = await prisma.assistantConversation.create({ data: { title: "طويلة", companyId, userId, messages: long } });
+    script(say(text("…")));
+    const res = await ask(token, { text: "كمان سؤال" }, row.id);
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("ASSISTANT_CONVERSATION_FULL");
+    expect(await prisma.assistantUsage.count()).toBe(0);
   });
 });
