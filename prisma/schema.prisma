@@ -1447,6 +1447,11 @@ model PayrollItem {
   advanceDeduction  Decimal          @default(0) @db.Decimal(14, 2)
   payAccount        ReceivingAccount
   note              String?
+  // Days on the books that month (from the hire date, to the end of service) out of the
+  // month's days: someone who joined or left in it is paid that share. Null on lines made
+  // before this was kept.
+  workedDays        Int?
+  monthDays         Int?
 
   runId      String
   run        PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)

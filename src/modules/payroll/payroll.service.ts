@@ -37,6 +37,8 @@ const itemSelect = {
   advanceDeduction: true,
   payAccount: true,
   note: true,
+  workedDays: true,
+  monthDays: true,
   employee: {
     select: { id: true, number: true, department: true, email: true, phone: true, bankName: true, bankAccount: true, walletNumber: true },
   },
@@ -72,6 +74,11 @@ const itemDto = (i: ItemRow) => ({
   advanceDeduction: moneyString(i.advanceDeduction),
   payAccount: i.payAccount,
   note: i.note,
+  // Joined or left during the month: paid for these days only (null for a whole month).
+  partMonth:
+    i.workedDays !== null && i.monthDays !== null && i.workedDays < i.monthDays
+      ? { days: i.workedDays, of: i.monthDays }
+      : null,
   ...totalsDto(payTotals(i)),
 });
 
@@ -220,25 +227,27 @@ function eligibleEmployees(db: Db | typeof prisma, companyId: string, month: str
 type Eligible = Awaited<ReturnType<typeof eligibleEmployees>>[number];
 
 /**
- * The share of the month worked by someone who joined or left in it (days on the
- * books / days in the month); 1 for a whole month.
+ * The days on the books in the month for someone who joined or left in it (from the
+ * hire date, to the end of service), out of the month's days: they're paid that share.
  */
-function workedShare(e: Eligible, month: string) {
+function workedDays(e: Eligible, month: string) {
   const { start, end } = monthRange(monthStart(month));
   const from = toIso(e.hireDate) > start ? toIso(e.hireDate) : start;
   const to = e.endDate && toIso(e.endDate) < end ? toIso(e.endDate) : end;
-  const days = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
-  const inMonth = (Date.parse(end) - Date.parse(start)) / 86_400_000 + 1;
-  return Math.max(0, Math.min(1, days / inMonth));
+  const inMonth = Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000) + 1;
+  const days = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  return { workedDays: Math.max(0, Math.min(inMonth, days)), monthDays: inMonth };
 }
 
 /** An employee's line for the month, from their pay, attendance and advances. */
 async function lineFor(db: Db, companyId: string, e: Eligible, month: string, installment: Decimal) {
-  const share = workedShare(e, month);
+  const period = workedDays(e, month);
+  const share = period.workedDays / period.monthDays;
   const prorate = (v: Decimal) => (share === 1 ? v : v.times(share).toDecimalPlaces(2, Decimal.ROUND_HALF_UP));
   const days = await unpaidDays(db, companyId, e.id, month);
   // A part month takes its share of the insurance and tax too, like the pay.
   const pay = {
+    ...period,
     baseSalary: prorate(e.baseSalary),
     allowances: prorate(e.allowances),
     absenceDays: days,

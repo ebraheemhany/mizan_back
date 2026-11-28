@@ -287,6 +287,26 @@ describe("payroll", () => {
     await employeeOf(token, { hireDate: addDays(start, 10), baseSalary: "3000", allowances: "0", insurance: "0", employerInsurance: "0", incomeTax: "0" });
     const run = await runOf(token, lastMonth());
     expect(run.items[0].baseSalary).toBe(((3000 * (days - 10)) / days).toFixed(2));
+    // The line says so: these days out of the month's.
+    expect(run.items[0].partMonth).toEqual({ days: days - 10, of: days });
+  });
+
+  it("a whole month says nothing about days; a hire date moved back and refreshed pays the whole month", async () => {
+    const { token } = await ownerSession();
+    const { start, end } = monthRange(`${lastMonth()}-01`);
+    const days = Number(end.slice(8));
+    // Added late in the month (e.g. with today's date as the hire date)...
+    const late = await employeeOf(token, { hireDate: addDays(start, days - 4), baseSalary: "4000", allowances: "3000", insurance: "100", employerInsurance: "50", incomeTax: "100" });
+    const before = (await runOf(token, lastMonth())).items[0];
+    expect(before.partMonth).toEqual({ days: 4, of: days });
+    expect(before.gross).toBe(((7000 * 4) / days).toFixed(2));
+
+    // ...then the real hire date: refreshing the draft pays the whole month.
+    await api().patch(`/api/employees/${late.id}`).set(auth(token)).send({ hireDate: "2025-01-01" }).expect(200);
+    const item = ok(await action(token, lastMonth(), "refresh")).payroll.items[0];
+    expect(item.partMonth).toBeNull();
+    expect(item.gross).toBe("7000.00");
+    expect(item.net).toBe("6800.00");
   });
 
   it("a part month takes its share of insurance and tax, and the installment never makes the pay negative", async () => {
